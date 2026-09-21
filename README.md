@@ -1,5 +1,7 @@
 # Rebuilds
 
+**Use them now: https://aayan-cloud.github.io/rebuilds/** — nothing to install.
+
 Ten projects that were either abandoned or briefly famous, rebuilt as single
 HTML files. No build step, no npm install, no accounts. Every page runs from a
 browser and is meant to hold 60fps on a mid-range phone.
