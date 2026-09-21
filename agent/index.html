@@ -159,6 +159,10 @@
       body: JSON.stringify({
         model: state.model, messages, stream: true,
         temperature: opts.temperature ?? 0.7, max_tokens: opts.max ?? 420,
+        // Reasoning models (Qwen3 and friends) otherwise spend the whole token
+        // budget thinking and return an empty answer. llama.cpp honours this;
+        // servers that don't know it ignore it.
+        chat_template_kwargs: { enable_thinking: false },
       }),
     });
     if (!res.ok || !res.body) throw new Error('model returned ' + res.status);
@@ -179,8 +183,10 @@
         if (payload === '[DONE]') continue;
         try {
           const json = JSON.parse(payload);
-          const piece = json.choices?.[0]?.delta?.content || '';
+          const delta = json.choices?.[0]?.delta || {};
+          const piece = delta.content || '';
           if (piece) { text += piece; state.tokens++; onToken(piece); }
+          else if (delta.reasoning_content) state.tokens++;   // still work, just not shown
         } catch (e) { /* partial frame, wait for more */ }
       }
     }
