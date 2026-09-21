@@ -1,0 +1,4 @@
+bench/shots/
+bench/results.json
+bench/checks.json
+node_modules/

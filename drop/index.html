@@ -1,0 +1,425 @@
+<meta charset="utf-8">
+<title>Toss</title>
+<link rel="icon" href="data:,">
+<meta name="description" content="Send a file straight to another device. No signup, no server, no upload.">
+<style>
+  :root {
+    --bg: #0a0c11; --card: #10131a; --fg: #edf0f6; --dim: #8b93a7; --line: #1d2230;
+    --accent: #7dd3fc; --ok: #63d2a4; --bad: #ff6b6b;
+    font-family: Geist, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #f5f6f9; --card: #fff; --fg: #12141b; --dim: #5c6377; --line: #e1e4eb; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg); min-height: 100vh;
+    display: grid; place-items: center; padding: 22px;
+  }
+  .wrap { width: min(560px, 100%); display: grid; gap: 16px; }
+  header h1 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: .18em; text-transform: uppercase; }
+  header p { margin: 6px 0 0; color: var(--dim); font-size: 13px; line-height: 1.55; }
+
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
+  .drop {
+    border: 1.5px dashed var(--line); border-radius: 12px; padding: 30px 18px; text-align: center;
+    color: var(--dim); font-size: 13px; cursor: pointer; transition: border-color .15s, color .15s;
+  }
+  .drop:hover, .drop.over { border-color: var(--accent); color: var(--fg); }
+  .drop b { display: block; color: var(--fg); font-size: 15px; margin-bottom: 5px; }
+
+  .tabs { display: flex; gap: 6px; margin-bottom: 14px; }
+  button {
+    font: inherit; font-size: 13px; color: var(--fg); background: transparent; cursor: pointer;
+    border: 1px solid var(--line); border-radius: 8px; padding: 8px 13px;
+  }
+  button:hover:not(:disabled) { border-color: var(--dim); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button[aria-pressed=true] { border-color: var(--accent); color: var(--accent); }
+  button.primary { border-color: var(--accent); color: var(--accent); }
+
+  textarea {
+    width: 100%; min-height: 84px; resize: vertical; background: var(--bg); color: var(--fg);
+    border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; font-size: 11px;
+    font-family: "Geist Mono", ui-monospace, monospace; word-break: break-all;
+  }
+  .label { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--dim); margin-bottom: 7px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .bar { height: 8px; background: color-mix(in srgb, var(--line) 70%, transparent); border-radius: 5px; overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .15s linear; }
+  .stats { display: flex; gap: 18px; flex-wrap: wrap; font-size: 12px; color: var(--dim); margin-top: 10px; }
+  .stats b { color: var(--fg); font-family: "Geist Mono", ui-monospace, monospace; font-weight: 500; margin-left: 6px; }
+  .state { font-size: 12px; color: var(--dim); }
+  .state.ok { color: var(--ok); } .state.bad { color: var(--bad); }
+  .files { display: grid; gap: 8px; margin-top: 12px; }
+  .file { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; align-items: center; }
+  .file a { color: var(--accent); }
+  .hidden { display: none; }
+</style>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
+
+<div class="wrap">
+  <header>
+    <h1>Toss</h1>
+    <p>Send a file from this device to another one. The file never touches a server: you swap one code, then the two browsers talk directly.</p>
+  </header>
+
+  <div class="card">
+    <div class="tabs">
+      <button id="tabSend" aria-pressed="true">Send</button>
+      <button id="tabRecv">Receive</button>
+      <span style="flex:1"></span>
+      <span class="state" id="state">idle</span>
+    </div>
+
+    <div id="sendPane">
+      <div class="drop" id="drop">
+        <b>Drop a file here</b>
+        or click to choose. Nothing uploads.
+      </div>
+      <input type="file" id="file" class="hidden" multiple>
+      <div id="sendSteps" class="hidden" style="margin-top:14px">
+        <div class="label">1. send this code to the other device</div>
+        <textarea id="offerOut" readonly></textarea>
+        <div class="row" style="margin-top:8px">
+          <button id="copyOffer">Copy code</button>
+          <span class="state" id="offerState">building…</span>
+        </div>
+        <div class="label" style="margin-top:16px">2. paste their reply here</div>
+        <textarea id="answerIn" placeholder="paste the reply code"></textarea>
+        <div class="row" style="margin-top:8px"><button id="connectBtn" class="primary">Connect</button></div>
+      </div>
+    </div>
+
+    <div id="recvPane" class="hidden">
+      <div class="label">1. paste the sender's code</div>
+      <textarea id="offerIn" placeholder="paste the code from the sending device"></textarea>
+      <div class="row" style="margin-top:8px"><button id="acceptBtn" class="primary">Accept</button></div>
+      <div id="recvSteps" class="hidden">
+        <div class="label" style="margin-top:16px">2. send this reply back</div>
+        <textarea id="answerOut" readonly></textarea>
+        <div class="row" style="margin-top:8px"><button id="copyAnswer">Copy reply</button></div>
+      </div>
+    </div>
+
+    <div style="margin-top:16px">
+      <div class="bar"><i id="prog"></i></div>
+      <div class="stats">
+        <span>transferred <b id="sDone">--</b></span>
+        <span>speed <b id="sRate">--</b></span>
+        <span>channel <b id="sChan">--</b></span>
+        <span>verified <b id="sHash">--</b></span>
+      </div>
+      <div class="files" id="files"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <button id="loopBtn">Loopback self-test</button>
+      <span class="state" id="loopState">measures real WebRTC throughput on this machine</span>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  'use strict';
+  const params = new URLSearchParams(location.search);
+  const PEAK = params.get('peak') === '1';
+  const el = id => document.getElementById(id);
+
+  const CHUNK = 16 * 1024;                 // 16 KB: the safe SCTP message size
+  const LOW_WATER = 1 << 20;               // resume sending under 1 MB buffered
+  const HIGH_WATER = 8 << 20;              // pause over 8 MB buffered
+  const RTC = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+
+  const state = { pc: null, chan: null, sending: null, recv: null, t0: 0, bytes: 0, rate: 0 };
+
+  const setState = (text, cls) => {
+    el('state').textContent = text;
+    el('state').className = 'state' + (cls ? ' ' + cls : '');
+  };
+
+  // ------------------------------------------------------- code compression
+  // An SDP blob is long; gzip + base64 keeps the code small enough to paste.
+  async function pack(obj) {
+    const json = JSON.stringify(obj);
+    if (!('CompressionStream' in window)) return btoa(unescape(encodeURIComponent(json)));
+    const cs = new Blob([json]).stream().pipeThrough(new CompressionStream('gzip'));
+    const buf = new Uint8Array(await new Response(cs).arrayBuffer());
+    let bin = '';
+    buf.forEach(b => (bin += String.fromCharCode(b)));
+    return 'gz:' + btoa(bin);
+  }
+  async function unpack(code) {
+    code = code.trim();
+    if (!code.startsWith('gz:')) return JSON.parse(decodeURIComponent(escape(atob(code))));
+    const bin = atob(code.slice(3));
+    const bytes = Uint8Array.from(bin, c => c.charCodeAt(0));
+    const ds = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+    return JSON.parse(await new Response(ds).text());
+  }
+
+  // Wait for ICE so the code contains everything the other side needs.
+  function iceComplete(pc) {
+    return new Promise(resolve => {
+      if (pc.iceGatheringState === 'complete') return resolve();
+      const check = () => {
+        if (pc.iceGatheringState === 'complete') {
+          pc.removeEventListener('icegatheringstatechange', check);
+          resolve();
+        }
+      };
+      pc.addEventListener('icegatheringstatechange', check);
+      setTimeout(resolve, 3000);           // relay-less networks can stall; send what we have
+    });
+  }
+
+  // ------------------------------------------------------------- transfer
+  async function sendFiles(chan, files) {
+    for (const file of files) {
+      chan.send(JSON.stringify({ t: 'meta', name: file.name, size: file.size, type: file.type }));
+      const reader = file.stream().getReader();
+      let sent = 0;
+      state.t0 = performance.now();
+      let carry = new Uint8Array(0);
+      const pushChunk = async (bytes) => {
+        if (chan.bufferedAmount > HIGH_WATER) {
+          await new Promise(r => {
+            chan.bufferedAmountLowThreshold = LOW_WATER;
+            chan.addEventListener('bufferedamountlow', r, { once: true });
+          });
+        }
+        chan.send(bytes);
+        sent += bytes.byteLength;
+        state.bytes = sent;
+        const secs = (performance.now() - state.t0) / 1000;
+        state.rate = sent / Math.max(secs, 0.001);
+        el('prog').style.width = ((sent / file.size) * 100).toFixed(1) + '%';
+        el('sDone').textContent = (sent / 1048576).toFixed(1) + ' MB';
+        el('sRate').textContent = (state.rate / 1048576).toFixed(1) + ' MB/s';
+      };
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        let buf = value;
+        if (carry.length) {
+          const merged = new Uint8Array(carry.length + buf.length);
+          merged.set(carry); merged.set(buf, carry.length);
+          buf = merged; carry = new Uint8Array(0);
+        }
+        let off = 0;
+        while (buf.length - off >= CHUNK) {
+          await pushChunk(buf.subarray(off, off + CHUNK));
+          off += CHUNK;
+        }
+        carry = buf.subarray(off).slice();
+      }
+      if (carry.length) await pushChunk(carry);
+      chan.send(JSON.stringify({ t: 'done', name: file.name }));
+      setState('sent ' + file.name, 'ok');
+    }
+  }
+
+  function receiveOn(chan) {
+    let incoming = null;
+    chan.binaryType = 'arraybuffer';
+    chan.onmessage = async e => {
+      if (typeof e.data === 'string') {
+        const msg = JSON.parse(e.data);
+        if (msg.t === 'meta') {
+          incoming = { ...msg, parts: [], got: 0 };
+          state.t0 = performance.now();
+          setState('receiving ' + msg.name);
+        } else if (msg.t === 'done' && incoming) {
+          const blob = new Blob(incoming.parts, { type: incoming.type || 'application/octet-stream' });
+          const digest = await crypto.subtle.digest('SHA-256', await blob.arrayBuffer());
+          const hex = [...new Uint8Array(digest)].slice(0, 4).map(b => b.toString(16).padStart(2, '0')).join('');
+          el('sHash').textContent = hex;
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = incoming.name;
+          a.textContent = 'save';
+          const row = document.createElement('div');
+          row.className = 'file';
+          row.innerHTML = `<span>${incoming.name} · ${(blob.size / 1048576).toFixed(1)} MB</span>`;
+          row.appendChild(a);
+          el('files').appendChild(row);
+          setState('received ' + incoming.name, 'ok');
+          incoming = null;
+        }
+        return;
+      }
+      if (!incoming) return;
+      incoming.parts.push(e.data);
+      incoming.got += e.data.byteLength;
+      state.bytes = incoming.got;
+      const secs = (performance.now() - state.t0) / 1000;
+      state.rate = incoming.got / Math.max(secs, 0.001);
+      el('prog').style.width = ((incoming.got / incoming.size) * 100).toFixed(1) + '%';
+      el('sDone').textContent = (incoming.got / 1048576).toFixed(1) + ' MB';
+      el('sRate').textContent = (state.rate / 1048576).toFixed(1) + ' MB/s';
+    };
+  }
+
+  // ------------------------------------------------------------------- send
+  let chosen = [];
+  el('drop').onclick = () => el('file').click();
+  el('drop').addEventListener('dragover', e => { e.preventDefault(); el('drop').classList.add('over'); });
+  el('drop').addEventListener('dragleave', () => el('drop').classList.remove('over'));
+  el('drop').addEventListener('drop', e => {
+    e.preventDefault();
+    el('drop').classList.remove('over');
+    chosen = [...e.dataTransfer.files];
+    startSend();
+  });
+  el('file').onchange = e => { chosen = [...e.target.files]; startSend(); };
+
+  async function startSend() {
+    if (!chosen.length) return;
+    el('drop').innerHTML = `<b>${chosen.length} file${chosen.length > 1 ? 's' : ''} ready</b>${chosen.map(f => f.name).join(', ').slice(0, 80)}`;
+    el('sendSteps').classList.remove('hidden');
+    const pc = new RTCPeerConnection(RTC);
+    state.pc = pc;
+    const chan = pc.createDataChannel('file', { ordered: true });
+    chan.binaryType = 'arraybuffer';
+    state.chan = chan;
+    chan.onopen = async () => {
+      el('sChan').textContent = 'open';
+      setState('connected, sending', 'ok');
+      await sendFiles(chan, chosen);
+    };
+    chan.onclose = () => el('sChan').textContent = 'closed';
+    receiveOn(chan);
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    await iceComplete(pc);
+    el('offerOut').value = await pack(pc.localDescription);
+    el('offerState').textContent = 'ready to send';
+  }
+
+  el('copyOffer').onclick = () => navigator.clipboard.writeText(el('offerOut').value);
+  el('copyAnswer').onclick = () => navigator.clipboard.writeText(el('answerOut').value);
+
+  el('connectBtn').onclick = async () => {
+    try {
+      const answer = await unpack(el('answerIn').value);
+      await state.pc.setRemoteDescription(answer);
+      setState('connecting…');
+    } catch (e) { setState('bad reply code', 'bad'); }
+  };
+
+  // ---------------------------------------------------------------- receive
+  el('acceptBtn').onclick = async () => {
+    try {
+      const offer = await unpack(el('offerIn').value);
+      const pc = new RTCPeerConnection(RTC);
+      state.pc = pc;
+      pc.ondatachannel = e => {
+        state.chan = e.channel;
+        e.channel.binaryType = 'arraybuffer';
+        el('sChan').textContent = 'open';
+        receiveOn(e.channel);
+      };
+      await pc.setRemoteDescription(offer);
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      await iceComplete(pc);
+      el('answerOut').value = await pack(pc.localDescription);
+      el('recvSteps').classList.remove('hidden');
+      setState('waiting for the file');
+    } catch (e) { setState('bad code', 'bad'); }
+  };
+
+  const tab = (btn, showId, hideId) => {
+    btn.onclick = () => {
+      el(showId).classList.remove('hidden');
+      el(hideId).classList.add('hidden');
+      el('tabSend').setAttribute('aria-pressed', String(showId === 'sendPane'));
+      el('tabRecv').setAttribute('aria-pressed', String(showId === 'recvPane'));
+    };
+  };
+  tab(el('tabSend'), 'sendPane', 'recvPane');
+  tab(el('tabRecv'), 'recvPane', 'sendPane');
+
+  // ------------------------------------------------------- loopback self-test
+  // Two peer connections in this page, so throughput can be measured without a
+  // second device. This is also what the benchmark drives.
+  async function loopback(sizeMB) {
+    el('loopState').textContent = 'connecting…';
+    const a = new RTCPeerConnection(RTC), b = new RTCPeerConnection(RTC);
+    a.onicecandidate = e => e.candidate && b.addIceCandidate(e.candidate);
+    b.onicecandidate = e => e.candidate && a.addIceCandidate(e.candidate);
+    const chan = a.createDataChannel('bench', { ordered: true });
+    chan.binaryType = 'arraybuffer';
+    const opened = new Promise(r => (chan.onopen = r));
+    let got = 0;
+    const finished = new Promise(r => {
+      b.ondatachannel = e => {
+        e.channel.binaryType = 'arraybuffer';
+        e.channel.onmessage = ev => {
+          got += ev.data.byteLength || 0;
+          if (got >= sizeMB * 1048576) r();
+        };
+      };
+    });
+    await a.setLocalDescription(await a.createOffer());
+    await b.setRemoteDescription(a.localDescription);
+    await b.setLocalDescription(await b.createAnswer());
+    await a.setRemoteDescription(b.localDescription);
+    await opened;
+
+    const payload = new Uint8Array(CHUNK).fill(7);
+    const total = sizeMB * 1048576;
+    const t0 = performance.now();
+    let sent = 0;
+    while (sent < total) {
+      if (chan.bufferedAmount > HIGH_WATER) {
+        await new Promise(r => {
+          chan.bufferedAmountLowThreshold = LOW_WATER;
+          chan.addEventListener('bufferedamountlow', r, { once: true });
+        });
+      }
+      chan.send(payload);
+      sent += payload.byteLength;
+      if ((sent / CHUNK) % 64 === 0) {
+        el('prog').style.width = ((sent / total) * 100).toFixed(1) + '%';
+        el('sDone').textContent = (sent / 1048576).toFixed(0) + ' MB';
+        const mbps = (sent / 1048576) / ((performance.now() - t0) / 1000);
+        el('sRate').textContent = mbps.toFixed(0) + ' MB/s';
+        await new Promise(r => setTimeout(r, 0));
+      }
+    }
+    await finished;
+    const secs = (performance.now() - t0) / 1000;
+    const mbps = sizeMB / secs;
+    el('loopState').textContent = `${sizeMB} MB in ${secs.toFixed(1)}s — ${mbps.toFixed(0)} MB/s`;
+    setState('loopback complete', 'ok');
+    a.close(); b.close();
+    return { sizeMB, seconds: +secs.toFixed(2), mbPerSec: +mbps.toFixed(1) };
+  }
+
+  el('loopBtn').onclick = () => loopback(PEAK ? 512 : 64);
+
+  const bench = {
+    result: null,
+    get memoryMB() { return performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : null; },
+    report() {
+      return {
+        loopback: this.result,
+        transferredMB: +((this.result ? this.result.sizeMB * 1048576 : state.bytes) / 1048576).toFixed(1),
+        rateMBs: +(state.rate / 1048576).toFixed(1),
+        chunkKB: CHUNK / 1024, memoryMB: this.memoryMB,
+        fps: null,
+      };
+    },
+    reset() { },
+    async run(sizeMB) { this.result = await loopback(sizeMB || (PEAK ? 512 : 64)); return this.report(); },
+  };
+  window.__bench = bench;
+
+  if (PEAK) setTimeout(() => bench.run(512), 800);
+})();
+</script>

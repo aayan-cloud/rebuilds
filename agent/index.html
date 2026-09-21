@@ -1,0 +1,385 @@
+<meta charset="utf-8">
+<title>Localmind</title>
+<link rel="icon" href="data:,">
+<meta name="description" content="An autonomous agent loop that runs entirely on your own machine. No API keys, no cloud.">
+<style>
+  :root {
+    --bg: #0a0c11; --card: #10131a; --fg: #edf0f6; --dim: #8a92a6; --line: #1d2230;
+    --accent: #a78bfa; --ok: #63d2a4; --bad: #ff6b6b; --run: #ffc46b;
+    font-family: Geist, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #f5f6f9; --card: #fff; --fg: #11131a; --dim: #5b6377; --line: #e1e4eb; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); min-height: 100vh; display: grid; grid-template-rows: auto 1fr; }
+
+  header { padding: 16px 22px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; gap: 16px; align-items: center; flex-wrap: wrap; }
+  h1 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: .18em; text-transform: uppercase; }
+  header p { margin: 5px 0 0; font-size: 12px; color: var(--dim); }
+  .conn { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--dim); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); }
+  .dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); } .dot.run { background: var(--run); }
+
+  main { display: grid; grid-template-columns: 330px 1fr; min-height: 0; }
+  aside { border-right: 1px solid var(--line); padding: 18px; display: grid; gap: 14px; align-content: start; overflow-y: auto; }
+  section.log { padding: 18px 22px; overflow-y: auto; display: grid; gap: 12px; align-content: start; }
+
+  textarea, input[type=text] {
+    width: 100%; background: var(--card); color: var(--fg); border: 1px solid var(--line);
+    border-radius: 10px; padding: 11px 13px; font: inherit; font-size: 13px; resize: vertical;
+  }
+  textarea:focus, input:focus { outline: none; border-color: var(--accent); }
+  .label { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--dim); margin-bottom: 7px; }
+  button {
+    font: inherit; font-size: 13px; color: var(--fg); background: transparent; cursor: pointer;
+    border: 1px solid var(--line); border-radius: 9px; padding: 9px 14px;
+  }
+  button:hover:not(:disabled) { border-color: var(--dim); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary { border-color: var(--accent); color: var(--accent); }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  .tasks { display: grid; gap: 7px; }
+  .task {
+    border: 1px solid var(--line); border-left-width: 3px; border-radius: 9px; padding: 9px 11px; font-size: 13px;
+  }
+  .task.pending { border-left-color: var(--line); color: var(--dim); }
+  .task.running { border-left-color: var(--run); }
+  .task.done { border-left-color: var(--ok); }
+  .task.failed { border-left-color: var(--bad); }
+  .task small { display: block; color: var(--dim); font-size: 11px; margin-top: 4px; font-family: "Geist Mono", ui-monospace, monospace; }
+
+  .entry { border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; background: var(--card); }
+  .entry h3 { margin: 0 0 8px; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--accent); }
+  .entry .body { font-size: 14px; line-height: 1.6; white-space: pre-wrap; }
+  .entry .meta { margin-top: 9px; font-size: 11px; color: var(--dim); font-family: "Geist Mono", ui-monospace, monospace; }
+  .cursor::after { content: '▍'; color: var(--accent); animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .cursor::after { animation: none; } }
+
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .stat { border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; }
+  .stat span { display: block; font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--dim); }
+  .stat b { font-family: "Geist Mono", ui-monospace, monospace; font-size: 16px; font-weight: 500; }
+  @media (max-width: 880px) {
+    main { grid-template-columns: 1fr; }
+    aside { border-right: 0; border-bottom: 1px solid var(--line); }
+  }
+</style>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
+
+<header>
+  <div>
+    <h1>Localmind</h1>
+    <p>An agent that plans, works through its own task list, and never leaves this machine.</p>
+  </div>
+  <div class="conn"><span class="dot" id="dot"></span><span id="conn">checking local model…</span></div>
+</header>
+
+<main>
+  <aside>
+    <div>
+      <div class="label">goal</div>
+      <textarea id="goal" rows="3" placeholder="e.g. plan a week of short videos about local AI">Plan three short videos explaining why a local AI model beats a paid API for a small business.</textarea>
+    </div>
+    <div>
+      <div class="label">endpoint</div>
+      <input type="text" id="endpoint" value="http://127.0.0.1:18500/v1">
+    </div>
+    <div class="row">
+      <button id="run" class="primary">Run</button>
+      <button id="stop" disabled>Stop</button>
+      <button id="export" disabled>Export</button>
+    </div>
+    <div>
+      <div class="label">tasks</div>
+      <div class="tasks" id="tasks"><div class="task pending">waiting for a goal</div></div>
+    </div>
+    <div>
+      <div class="label">run stats</div>
+      <div class="stats">
+        <div class="stat"><span>tokens</span><b id="sTok">0</b></div>
+        <div class="stat"><span>tok/s</span><b id="sRate">--</b></div>
+        <div class="stat"><span>calls</span><b id="sCalls">0</b></div>
+        <div class="stat"><span>elapsed</span><b id="sTime">0s</b></div>
+      </div>
+    </div>
+  </aside>
+
+  <section class="log" id="log"></section>
+</main>
+
+<script>
+(() => {
+  'use strict';
+  const params = new URLSearchParams(location.search);
+  const PEAK = params.get('peak') === '1';
+  const DEMO = params.get('demo') === '1' || PEAK;
+  const el = id => document.getElementById(id);
+
+  const state = { running: false, abort: null, tokens: 0, calls: 0, t0: 0, model: null, entries: [] };
+
+  // ------------------------------------------------------------- connection
+  async function probe() {
+    if (DEMO) {
+      state.model = 'demo-model';
+      el('dot').className = 'dot ok';
+      el('conn').textContent = 'demo mode (no model needed)';
+      return true;
+    }
+    try {
+      const r = await fetch(el('endpoint').value.replace(/\/$/, '') + '/models', { cache: 'no-store' });
+      if (!r.ok) throw new Error(r.status);
+      const j = await r.json();
+      state.model = (j.data && j.data[0] && j.data[0].id) || 'local';
+      el('dot').className = 'dot ok';
+      el('conn').textContent = state.model;
+      return true;
+    } catch (e) {
+      el('dot').className = 'dot bad';
+      el('conn').textContent = 'no local model on that port';
+      return false;
+    }
+  }
+  el('endpoint').onchange = probe;
+
+  // ------------------------------------------------------------- llm calls
+  // Streams an OpenAI-compatible completion and calls onToken for each piece.
+  async function stream(messages, onToken, opts = {}) {
+    state.calls++;
+    el('sCalls').textContent = state.calls;
+    if (DEMO) return demoStream(messages, onToken, opts);
+
+    const res = await fetch(el('endpoint').value.replace(/\/$/, '') + '/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      signal: state.abort.signal,
+      body: JSON.stringify({
+        model: state.model, messages, stream: true,
+        temperature: opts.temperature ?? 0.7, max_tokens: opts.max ?? 420,
+      }),
+    });
+    if (!res.ok || !res.body) throw new Error('model returned ' + res.status);
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '', text = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        const t = line.trim();
+        if (!t.startsWith('data:')) continue;
+        const payload = t.slice(5).trim();
+        if (payload === '[DONE]') continue;
+        try {
+          const json = JSON.parse(payload);
+          const piece = json.choices?.[0]?.delta?.content || '';
+          if (piece) { text += piece; state.tokens++; onToken(piece); }
+        } catch (e) { /* partial frame, wait for more */ }
+      }
+    }
+    return text;
+  }
+
+  // Scripted stand-in so the page works with no model behind it, and so the
+  // benchmark measures the streaming UI rather than the GPU.
+  async function demoStream(messages, onToken, opts) {
+    const isPlan = /break this goal/i.test(messages[messages.length - 1].content);
+    const body = isPlan
+      ? '1. Name the real cost of a paid API for a small shop\n2. Show the same job running on one local machine\n3. Close on privacy: the data never leaves the building'
+      : 'Open on the bill, not the technology. Show a real invoice for an API-based tool, '
+        + 'then cut to the same task running on a desk machine with the network unplugged. '
+        + 'Hold on that detail, because it is the part people remember. End with the one line '
+        + 'that matters: the data never left the room.';
+    const words = body.split(/(\s+)/);
+    const delay = PEAK ? 0 : 18;
+    let out = '';
+    for (const w of words) {
+      if (!state.running) break;
+      out += w;
+      state.tokens++;
+      onToken(w);
+      if (delay) await new Promise(r => setTimeout(r, delay));
+      else if (state.tokens % 32 === 0) await new Promise(r => setTimeout(r, 0));
+    }
+    return out;
+  }
+
+  // --------------------------------------------------------------- ui bits
+  function entry(title) {
+    const d = document.createElement('div');
+    d.className = 'entry';
+    d.innerHTML = `<h3>${title}</h3><div class="body cursor"></div><div class="meta"></div>`;
+    el('log').appendChild(d);
+    el('log').scrollTop = el('log').scrollHeight;
+    const body = d.querySelector('.body');
+    const t0 = performance.now();
+    return {
+      push(text) {
+        body.textContent += text;
+        el('log').scrollTop = el('log').scrollHeight;
+      },
+      finish(note) {
+        body.classList.remove('cursor');
+        const secs = (performance.now() - t0) / 1000;
+        d.querySelector('.meta').textContent = note || `${secs.toFixed(1)}s`;
+        state.entries.push({ title, text: body.textContent });
+      },
+    };
+  }
+
+  function renderTasks(tasks) {
+    el('tasks').innerHTML = tasks.map((t, i) =>
+      `<div class="task ${t.status}">${i + 1}. ${t.text}${t.note ? `<small>${t.note}</small>` : ''}</div>`).join('');
+  }
+
+  // ----------------------------------------------------------------- loop
+  async function run() {
+    if (state.running) return;
+    const goal = el('goal').value.trim();
+    if (!goal) return;
+
+    state.running = true;
+    state.abort = new AbortController();
+    state.tokens = 0; state.calls = 0; state.t0 = performance.now(); state.entries = [];
+    el('log').innerHTML = '';
+    el('run').disabled = true; el('stop').disabled = false; el('export').disabled = true;
+    el('dot').className = 'dot run';
+
+    try {
+      // 1. plan
+      const planEntry = entry('Plan');
+      const planText = await stream([
+        { role: 'system', content: 'You are a planning agent. Answer with a numbered list only, no preamble.' },
+        { role: 'user', content: `Break this goal into 3 to 5 concrete tasks:\n\n${goal}` },
+      ], t => planEntry.push(t), { max: 260, temperature: 0.4 });
+      planEntry.finish();
+
+      let tasks = planText.split('\n')
+        .map(l => l.replace(/^\s*[\d.)\-*]+\s*/, '').trim())
+        .filter(l => l.length > 3)
+        .slice(0, PEAK ? 12 : 5)
+        .map(text => ({ text, status: 'pending' }));
+      if (!tasks.length) tasks = [{ text: goal, status: 'pending' }];
+      if (PEAK) while (tasks.length < 12) tasks.push({ text: tasks[tasks.length % 3].text + ' (variant)', status: 'pending' });
+      renderTasks(tasks);
+
+      // 2. work each task
+      const results = [];
+      for (const task of tasks) {
+        if (!state.running) break;
+        task.status = 'running';
+        renderTasks(tasks);
+        const e = entry(task.text.slice(0, 60));
+        const t0 = performance.now();
+        const before = state.tokens;
+        try {
+          const text = await stream([
+            { role: 'system', content: 'You do one task well and answer in short, concrete prose. No lists unless asked.' },
+            { role: 'user', content: `Goal: ${goal}\n\nDo this task and nothing else:\n${task.text}` },
+          ], t => e.push(t), { max: 320 });
+          const secs = (performance.now() - t0) / 1000;
+          const rate = (state.tokens - before) / Math.max(secs, 0.01);
+          e.finish(`${secs.toFixed(1)}s · ${rate.toFixed(1)} tok/s`);
+          task.status = 'done';
+          task.note = `${rate.toFixed(1)} tok/s`;
+          results.push(text);
+        } catch (err) {
+          e.finish('failed: ' + err.message);
+          task.status = 'failed';
+        }
+        renderTasks(tasks);
+      }
+
+      // 3. synthesise
+      if (state.running && results.length) {
+        const fin = entry('Result');
+        await stream([
+          { role: 'system', content: 'Combine the work into one tight answer the user can act on.' },
+          { role: 'user', content: `Goal: ${goal}\n\nWork done:\n${results.join('\n\n')}` },
+        ], t => fin.push(t), { max: 380 });
+        fin.finish();
+      }
+    } catch (err) {
+      const e = entry('Stopped');
+      e.push(String(err.message || err));
+      e.finish();
+    } finally {
+      stop();
+    }
+  }
+
+  function stop() {
+    state.running = false;
+    if (state.abort) state.abort.abort();
+    el('run').disabled = false;
+    el('stop').disabled = true;
+    el('export').disabled = state.entries.length === 0;
+    el('dot').className = 'dot ok';
+  }
+
+  el('run').onclick = run;
+  el('stop').onclick = stop;
+  el('export').onclick = () => {
+    const md = `# ${el('goal').value.trim()}\n\n` +
+      state.entries.map(e => `## ${e.title}\n\n${e.text}\n`).join('\n');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([md], { type: 'text/markdown' }));
+    a.download = 'localmind-run.md';
+    a.click();
+  };
+
+  setInterval(() => {
+    if (!state.running) return;
+    const secs = (performance.now() - state.t0) / 1000;
+    el('sTok').textContent = state.tokens;
+    el('sTime').textContent = secs.toFixed(0) + 's';
+    el('sRate').textContent = (state.tokens / Math.max(secs, 0.01)).toFixed(1);
+  }, 250);
+
+  // ---------------------------------------------------------------- bench
+  const bench = {
+    frames: 0, fps: 0, samples: [], slow: 0, worst: 0,
+    get memoryMB() { return performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : null; },
+    report() {
+      const s = this.samples.slice().sort((a, b) => a - b);
+      const pct = p => s.length ? +s[Math.min(s.length - 1, Math.floor(s.length * p))].toFixed(2) : null;
+      const secs = (performance.now() - state.t0) / 1000;
+      return {
+        frames: this.frames, fps: +this.fps.toFixed(1), medianFrameMs: pct(0.5),
+        p95FrameMs: pct(0.95), worstFrameMs: +this.worst.toFixed(2), slowFrames: this.slow,
+        mode: DEMO ? 'demo' : 'local model', model: state.model,
+        tokens: state.tokens, calls: state.calls,
+        tokensPerSec: state.t0 ? +(state.tokens / Math.max(secs, 0.01)).toFixed(1) : null,
+        running: state.running, domNodes: document.querySelectorAll('*').length,
+        memoryMB: this.memoryMB,
+      };
+    },
+    reset() { this.frames = 0; this.samples = []; this.slow = 0; this.worst = 0; },
+    run, stop,
+  };
+  window.__bench = bench;
+
+  let last = performance.now(), acc = 0, count = 0;
+  (function frame(now) {
+    requestAnimationFrame(frame);
+    const ms = Math.min(200, now - last);
+    last = now;
+    bench.frames++;
+    bench.samples.push(ms);
+    if (bench.samples.length > 2000) bench.samples.shift();
+    if (ms > 1000 / 45) bench.slow++;
+    if (ms > bench.worst && bench.frames > 5) bench.worst = ms;
+    acc += ms; count++;
+    if (acc > 500) { bench.fps = 1000 / (acc / count); acc = 0; count = 0; }
+  })(performance.now());
+
+  probe().then(ok => { if (PEAK || (DEMO && params.get('auto') !== '0')) setTimeout(run, 600); });
+})();
+</script>

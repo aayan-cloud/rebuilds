@@ -1,0 +1,548 @@
+<meta charset="utf-8">
+<title>Lift Logic</title>
+<link rel="icon" href="data:,">
+<meta name="description" content="Watch elevator dispatch algorithms compete in real time. Deterministic, single file.">
+<style>
+  :root {
+    --bg: #07080c; --panel: #0c0e14; --fg: #e9ebf1; --dim: #868da3; --line: #1b1f2c;
+    --up: #63d2a4; --down: #ff9d6b; --hot: #ff5f56; --accent: #7aa2ff;
+    font-family: Geist, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg); height: 100vh;
+    display: grid; grid-template-columns: 1fr 300px; overflow: hidden;
+  }
+  canvas { display: block; width: 100%; height: 100vh; }
+  aside {
+    border-left: 1px solid var(--line); background: var(--panel);
+    padding: 20px 18px; display: grid; gap: 18px; align-content: start;
+    overflow-y: auto; font-size: 13px;
+  }
+  h1 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: .18em; text-transform: uppercase; }
+  .sub { margin: 6px 0 0; color: var(--dim); font-size: 12px; line-height: 1.55; }
+  .group { display: grid; gap: 8px; }
+  .label { color: var(--dim); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; }
+  .algos { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  button {
+    font: inherit; font-size: 12px; color: var(--fg); background: transparent; cursor: pointer;
+    border: 1px solid var(--line); border-radius: 7px; padding: 7px 9px; text-align: left;
+  }
+  button:hover { border-color: var(--dim); }
+  button[aria-pressed=true] { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  input[type=range] { width: 130px; accent-color: var(--accent); }
+  .num, output { font-family: "Geist Mono", ui-monospace, "Cascadia Code", monospace; }
+  .metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 8px; }
+  .metric { border: 1px solid var(--line); border-radius: 9px; padding: 9px 10px; }
+  .metric span { display: block; color: var(--dim); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; }
+  .metric b { font-family: "Geist Mono", ui-monospace, monospace; font-size: 17px; font-weight: 500; }
+  .metric.bad b { color: var(--hot); }
+  #spark { width: 100%; height: 46px; display: block; border: 1px solid var(--line); border-radius: 8px; }
+  .legend { display: flex; gap: 12px; color: var(--dim); font-size: 11px; }
+  .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; vertical-align: 1px; }
+  @media (max-width: 860px) {
+    body { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
+    canvas { height: 62vh; }
+    aside { border-left: 0; border-top: 1px solid var(--line); height: 38vh; }
+  }
+</style>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
+
+<canvas id="view"></canvas>
+
+<aside>
+  <div>
+    <h1>Lift Logic</h1>
+    <p class="sub">Four dispatch algorithms, the same building and the same arrivals. The seed is fixed, so a rerun is a fair comparison.</p>
+  </div>
+
+  <div class="group">
+    <div class="label">algorithm</div>
+    <div class="algos">
+      <button data-algo="nearest" aria-pressed="true">Nearest car</button>
+      <button data-algo="scan">Scan / LOOK</button>
+      <button data-algo="fcfs">First come</button>
+      <button data-algo="zoned">Zoned</button>
+    </div>
+  </div>
+
+  <div class="group">
+    <div class="row"><span class="label">traffic</span><output id="rateOut" class="num">1.4/s</output></div>
+    <input id="rate" type="range" min="1" max="120" step="1" value="14">
+    <div class="row"><span class="label">speed</span><output id="speedOut" class="num">1x</output></div>
+    <input id="speed" type="range" min="1" max="16" step="1" value="1">
+  </div>
+
+  <div class="group">
+    <div class="label">results</div>
+    <div class="metrics">
+      <div class="metric"><span>avg wait</span><b id="mWait">--</b></div>
+      <div class="metric"><span>p95 wait</span><b id="mP95">--</b></div>
+      <div class="metric"><span>served</span><b id="mServed">--</b></div>
+      <div class="metric"><span>waiting</span><b id="mQueue">--</b></div>
+      <div class="metric"><span>throughput</span><b id="mTput">--</b></div>
+      <div class="metric"><span>fps</span><b id="mFps">--</b></div>
+    </div>
+    <canvas id="spark"></canvas>
+    <div class="legend">
+      <span><i class="dot" style="background:var(--up)"></i>going up</span>
+      <span><i class="dot" style="background:var(--down)"></i>going down</span>
+      <span><i class="dot" style="background:var(--hot)"></i>waiting 60s+</span>
+    </div>
+  </div>
+
+  <div class="group">
+    <button id="resetBtn">Reset with same seed</button>
+  </div>
+</aside>
+
+<script>
+(() => {
+  'use strict';
+  const params = new URLSearchParams(location.search);
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const PEAK = params.get('peak') === '1';
+
+  // Deterministic RNG so two runs of the same algorithm are comparable.
+  const SEED = +(params.get('seed') || 20260920);
+  function rng(seed) {
+    let s = seed >>> 0;
+    return () => {
+      s ^= s << 13; s >>>= 0; s ^= s >> 17; s ^= s << 5; s >>>= 0;
+      return s / 4294967296;
+    };
+  }
+
+  const CFG = {
+    floors: +(params.get('floors') || (PEAK ? 28 : 12)),
+    cars: +(params.get('cars') || (PEAK ? 8 : 3)),
+    capacity: 12,
+    speed: 2.4,          // floors per second at full speed
+    accel: 3.2,
+    dwell: 2.2,          // seconds with doors open
+    doorTime: 0.7,
+    rate: PEAK ? 9 : 1.4, // arrivals per second
+    maxPeople: PEAK ? 4000 : 800,
+  };
+
+  let algo = params.get('algo') || 'nearest';
+  let simSpeed = PEAK ? 8 : 1;
+
+  const canvas = document.getElementById('view');
+  const ctx = canvas.getContext('2d');
+  const spark = document.getElementById('spark');
+  const sctx = spark.getContext('2d');
+
+  let sim, rand;
+
+  function reset() {
+    rand = rng(SEED);
+    sim = {
+      t: 0, spawnAcc: 0, nextId: 1,
+      people: [],            // waiting at a floor
+      served: [], waits: [], recent: [],
+      cars: Array.from({ length: CFG.cars }, (_, i) => ({
+        id: i, pos: i * (CFG.floors - 1) / Math.max(1, CFG.cars - 1) | 0,
+        target: null, dir: 0, v: 0, riders: [], door: 0, state: 'idle', dwell: 0,
+        zone: [Math.floor(i * CFG.floors / CFG.cars), Math.floor((i + 1) * CFG.floors / CFG.cars) - 1],
+        distance: 0,
+      })),
+    };
+  }
+  reset();
+
+  // -- traffic ---------------------------------------------------------------
+  function spawn() {
+    if (sim.people.length >= CFG.maxPeople) return;
+    // Morning-rush shape: most arrivals start at the lobby, some inter-floor.
+    const lobbyBias = rand() < 0.55;
+    let from = lobbyBias ? 0 : Math.floor(rand() * CFG.floors);
+    let to = lobbyBias
+      ? 1 + Math.floor(rand() * (CFG.floors - 1))
+      : Math.floor(rand() * CFG.floors);
+    if (to === from) to = (from + 1) % CFG.floors;
+    sim.people.push({ id: sim.nextId++, from, to, since: sim.t, car: null });
+  }
+
+  // -- dispatch --------------------------------------------------------------
+  // Rebuilt once per step: how many waiting people each car owes, and which
+  // floors it still has to reach. Without this index every person asked every
+  // car a question whose answer scanned every person - quadratic, which at peak
+  // meant 4000 people x 8 cars x a 4000-person scan, thirty times a second.
+  function indexAssignments() {
+    for (const car of sim.cars) {
+      if (!car.pending) car.pending = new Set();
+      car.pending.clear();
+      car.owed = 0;
+    }
+    for (const p of sim.people) {
+      if (p.car === null) continue;
+      const car = sim.cars[p.car];
+      if (!car) { p.car = null; continue; }
+      car.owed++;
+      car.pending.add(p.from);
+    }
+  }
+
+  function assign(person) {
+    const cars = sim.cars;
+    if (algo === 'fcfs') {
+      // One queue: the least busy car takes the oldest call, whatever the distance.
+      return cars.reduce((a, b) =>
+        (a.riders.length + a.owed) <= (b.riders.length + b.owed) ? a : b);
+    }
+    if (algo === 'zoned') {
+      const inZone = cars.filter(c => person.from >= c.zone[0] && person.from <= c.zone[1]);
+      const pool = inZone.length ? inZone : cars;
+      return pool.reduce((a, b) => cost(a, person) < cost(b, person) ? a : b);
+    }
+    if (algo === 'scan') {
+      // Prefer a car already sweeping towards the call in the right direction.
+      const want = Math.sign(person.to - person.from);
+      const sweeping = cars.filter(c =>
+        c.dir === want && (want > 0 ? c.pos <= person.from + 0.5 : c.pos >= person.from - 0.5));
+      const pool = sweeping.length ? sweeping : cars;
+      return pool.reduce((a, b) => Math.abs(a.pos - person.from) < Math.abs(b.pos - person.from) ? a : b);
+    }
+    return cars.reduce((a, b) => cost(a, person) < cost(b, person) ? a : b);
+  }
+
+  // Estimated cost: travel distance, plus a penalty for a full or busy car,
+  // plus a penalty for turning around.
+  function cost(car, person) {
+    const d = Math.abs(car.pos - person.from);
+    const load = (car.riders.length + car.owed) / CFG.capacity;
+    const want = Math.sign(person.to - person.from);
+    const turn = car.dir && want && car.dir !== want ? 3 : 0;
+    const behind = car.dir && Math.sign(person.from - car.pos) !== car.dir ? 4 : 0;
+    return d + load * 8 + turn + behind;
+  }
+
+  function nextStop(car) {
+    // A full car that keeps answering hall calls never reaches anyone's floor.
+    // At peak that starved the building: 24 people delivered in 262 seconds
+    // while every car sat full. Full car = drop-offs only.
+    const full = car.riders.length >= CFG.capacity;
+    const stops = new Set(full ? [] : car.pending);   // waiting calls, indexed this step
+    for (const r of car.riders) stops.add(r.to);
+    if (!stops.size) return null;
+    const list = [...stops];
+
+    if (algo === 'scan' && car.dir) {
+      // Keep sweeping in the current direction while anything lies ahead.
+      const ahead = list.filter(f => car.dir > 0 ? f > car.pos - 0.01 : f < car.pos + 0.01);
+      if (ahead.length) {
+        return car.dir > 0 ? Math.min(...ahead) : Math.max(...ahead);
+      }
+    }
+    return list.reduce((a, b) => Math.abs(a - car.pos) < Math.abs(b - car.pos) ? a : b);
+  }
+
+  // -- physics ---------------------------------------------------------------
+  function step(dt) {
+    sim.t += dt;
+
+    sim.spawnAcc += dt * CFG.rate;
+    while (sim.spawnAcc >= 1) { spawn(); sim.spawnAcc -= 1; }
+
+    indexAssignments();
+    for (const p of sim.people) {
+      if (p.car === null) {
+        const car = assign(p);
+        if (car) {
+          p.car = car.id;
+          // Keep the index live, so the next person in this same step sees the
+          // load we just added instead of piling onto one car.
+          car.owed++;
+          car.pending.add(p.from);
+        }
+      }
+    }
+
+    for (const car of sim.cars) {
+      if (car.state === 'doors') {
+        car.dwell -= dt;
+        car.door = Math.min(1, car.door + dt / CFG.doorTime);
+        if (car.dwell <= 0) {
+          // Unload, then load whoever fits.
+          for (let i = car.riders.length - 1; i >= 0; i--) {
+            if (Math.abs(car.riders[i].to - car.pos) < 0.05) {
+              const r = car.riders.splice(i, 1)[0];
+              sim.served.push(r);
+              sim.waits.push(r.waited);
+              sim.recent.push({ t: sim.t, w: r.waited });
+            }
+          }
+          for (let i = sim.people.length - 1; i >= 0; i--) {
+            const p = sim.people[i];
+            if (p.car === car.id && Math.abs(p.from - car.pos) < 0.05 && car.riders.length < CFG.capacity) {
+              p.waited = sim.t - p.since;
+              car.riders.push(p);
+              sim.people.splice(i, 1);
+            }
+          }
+          car.state = 'closing';
+        }
+        continue;
+      }
+      if (car.state === 'closing') {
+        car.door = Math.max(0, car.door - dt / CFG.doorTime);
+        if (car.door <= 0) { car.state = 'idle'; car.target = null; }
+        continue;
+      }
+
+      if (car.target === null) {
+        const t = nextStop(car);
+        if (t === null) { car.dir = 0; car.v = 0; continue; }
+        car.target = t;
+        car.dir = Math.sign(t - car.pos) || car.dir || 1;
+      }
+
+      const remaining = car.target - car.pos;
+      const dist = Math.abs(remaining);
+      if (dist < 0.02) {
+        car.pos = car.target;
+        car.v = 0;
+        car.state = 'doors';
+        car.dwell = CFG.dwell;
+        continue;
+      }
+      // Trapezoid profile: accelerate, cruise, brake in time to stop on the floor.
+      const brakeDist = (car.v * car.v) / (2 * CFG.accel);
+      if (dist <= brakeDist) car.v = Math.max(0.25, car.v - CFG.accel * dt);
+      else car.v = Math.min(CFG.speed, car.v + CFG.accel * dt);
+      const move = Math.min(dist, car.v * dt);
+      car.pos += Math.sign(remaining) * move;
+      car.distance += move;
+      car.dir = Math.sign(remaining);
+    }
+
+    // Trim history so a long peak run does not grow without bound.
+    if (sim.recent.length > 4000) sim.recent.splice(0, sim.recent.length - 4000);
+    if (sim.waits.length > 20000) sim.waits.splice(0, sim.waits.length - 20000);
+    if (sim.served.length > 20000) sim.served.splice(0, sim.served.length - 20000);
+  }
+
+  // -- drawing ---------------------------------------------------------------
+  function fit() {
+    const dpr = Math.min(devicePixelRatio || 1, 2);
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
+      canvas.width = w * dpr; canvas.height = h * dpr;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    if (spark.width !== spark.clientWidth * dpr) {
+      spark.width = spark.clientWidth * dpr; spark.height = 46 * dpr;
+      sctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    return { w, h };
+  }
+
+  function draw() {
+    const { w, h } = fit();
+    ctx.clearRect(0, 0, w, h);
+
+    const padT = 34, padB = 26, padL = 58;
+    const usable = h - padT - padB;
+    const fh = usable / CFG.floors;                  // floor height in px
+    const shaftW = Math.min(64, (w - padL - 30) / CFG.cars);
+    const yOf = f => padT + usable - (f + 0.5) * fh;
+
+    ctx.font = '11px "Geist Mono", ui-monospace, monospace';
+    ctx.textBaseline = 'middle';
+
+    // floors
+    for (let f = 0; f < CFG.floors; f++) {
+      const y = yOf(f);
+      ctx.strokeStyle = '#141826';
+      ctx.beginPath(); ctx.moveTo(padL - 10, y + fh / 2); ctx.lineTo(w - 16, y + fh / 2); ctx.stroke();
+      ctx.fillStyle = '#5b6277';
+      ctx.textAlign = 'right';
+      if (fh > 13 || f % 2 === 0) ctx.fillText(f === 0 ? 'L' : String(f), padL - 18, y);
+    }
+
+    // people waiting, stacked per floor, coloured by direction and age
+    const perFloor = new Map();
+    for (const p of sim.people) {
+      if (!perFloor.has(p.from)) perFloor.set(p.from, []);
+      perFloor.get(p.from).push(p);
+    }
+    for (const [floor, list] of perFloor) {
+      const y = yOf(floor);
+      const r = Math.max(2, Math.min(3.4, fh * 0.16));
+      for (let i = 0; i < list.length && i < 46; i++) {
+        const p = list[i];
+        const age = sim.t - p.since;
+        ctx.fillStyle = age > 60 ? '#ff5f56' : (p.to > p.from ? '#63d2a4' : '#ff9d6b');
+        ctx.globalAlpha = age > 60 ? 1 : 0.55 + Math.min(0.45, age / 60);
+        const x = w - 22 - (i % 23) * (r * 2.4);
+        const yy = y + (i >= 23 ? r * 2.2 : 0) - (fh > 16 ? 0 : 2);
+        ctx.beginPath(); ctx.arc(x, yy, r, 0, 6.283); ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      if (list.length > 46) {
+        ctx.fillStyle = '#5b6277'; ctx.textAlign = 'right';
+        ctx.fillText('+' + (list.length - 46), w - 22 - 23 * 8, y + fh * 0.5);
+      }
+    }
+
+    // shafts and cars
+    for (const car of sim.cars) {
+      const x = padL + car.id * shaftW;
+      ctx.fillStyle = '#0a0c13';
+      ctx.fillRect(x, padT, shaftW - 8, usable);
+      ctx.strokeStyle = '#171b28';
+      ctx.strokeRect(x + 0.5, padT + 0.5, shaftW - 9, usable - 1);
+
+      const y = yOf(car.pos);
+      const ch = Math.max(9, fh * 0.78), cw = shaftW - 16;
+      const load = car.riders.length / CFG.capacity;
+
+      ctx.fillStyle = car.state === 'doors' ? '#1d2436' : '#151a27';
+      ctx.strokeStyle = car.dir > 0 ? '#63d2a4' : car.dir < 0 ? '#ff9d6b' : '#2a3143';
+      roundRect(ctx, x + 4, y - ch / 2, cw, ch, 3);
+      ctx.fill(); ctx.stroke();
+
+      // load bar
+      ctx.fillStyle = load > 0.85 ? '#ff5f56' : '#7aa2ff';
+      ctx.fillRect(x + 4, y + ch / 2 - 2.5, cw * load, 2.5);
+
+      // door gap animation
+      if (car.door > 0) {
+        ctx.fillStyle = '#05060a';
+        const gap = cw * 0.42 * car.door;
+        ctx.fillRect(x + 4 + cw / 2 - gap, y - ch / 2 + 1.5, gap * 2, ch - 5);
+      }
+      if (ch > 12) {
+        ctx.fillStyle = '#9aa2b8'; ctx.textAlign = 'center';
+        ctx.fillText(String(car.riders.length), x + 4 + cw / 2, y);
+      }
+    }
+
+    // header
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#868da3';
+    ctx.fillText(
+      `${algo} · ${CFG.cars} cars · ${CFG.floors} floors · ${CFG.rate.toFixed(1)} arrivals/s · t+${sim.t.toFixed(0)}s`,
+      padL, 16);
+  }
+
+  function roundRect(c, x, y, w, h, r) {
+    c.beginPath();
+    c.moveTo(x + r, y);
+    c.arcTo(x + w, y, x + w, y + h, r);
+    c.arcTo(x + w, y + h, x, y + h, r);
+    c.arcTo(x, y + h, x, y, r);
+    c.arcTo(x, y, x + w, y, r);
+    c.closePath();
+  }
+
+  function drawSpark() {
+    const w = spark.clientWidth, h = 46;
+    sctx.clearRect(0, 0, w, h);
+    const pts = sim.recent.slice(-160);
+    if (pts.length < 2) return;
+    const max = Math.max(20, ...pts.map(p => p.w));
+    sctx.strokeStyle = '#7aa2ff'; sctx.lineWidth = 1.5;
+    sctx.beginPath();
+    pts.forEach((p, i) => {
+      const x = (i / (pts.length - 1)) * (w - 2) + 1;
+      const y = h - 3 - (p.w / max) * (h - 8);
+      i ? sctx.lineTo(x, y) : sctx.moveTo(x, y);
+    });
+    sctx.stroke();
+    sctx.fillStyle = '#5b6277';
+    sctx.font = '9px "Geist Mono", monospace';
+    sctx.fillText(max.toFixed(0) + 's', 4, 10);
+  }
+
+  // -- metrics ---------------------------------------------------------------
+  const el = id => document.getElementById(id);
+  function metrics() {
+    const w = sim.waits;
+    const avg = w.length ? w.reduce((a, b) => a + b, 0) / w.length : 0;
+    const sorted = w.slice().sort((a, b) => a - b);
+    const p95 = sorted.length ? sorted[Math.floor(sorted.length * 0.95)] : 0;
+    const tput = sim.t > 0 ? (sim.served.length / sim.t) * 60 : 0;
+    return { avg, p95, served: sim.served.length, waiting: sim.people.length, tput };
+  }
+
+  const bench = {
+    frames: 0, fps: 0, slow: 0, worst: 0, samples: [],
+    get memoryMB() { return performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : null; },
+    report() {
+      const m = metrics();
+      const s = this.samples.slice().sort((a, b) => a - b);
+      const pct = p => s.length ? +s[Math.min(s.length - 1, Math.floor(s.length * p))].toFixed(2) : null;
+      return {
+        algo, frames: this.frames, fps: +this.fps.toFixed(1),
+        medianFrameMs: pct(0.5), p95FrameMs: pct(0.95), worstFrameMs: +this.worst.toFixed(2),
+        slowFrames: this.slow,
+        simSeconds: +sim.t.toFixed(0), entities: sim.people.length + sim.cars.reduce((a, c) => a + c.riders.length, 0),
+        avgWaitS: +m.avg.toFixed(1), p95WaitS: +m.p95.toFixed(1), served: m.served,
+        waiting: m.waiting, throughputPerMin: +m.tput.toFixed(1), memoryMB: this.memoryMB,
+      };
+    },
+    reset() { this.frames = 0; this.slow = 0; this.worst = 0; this.samples = []; },
+    setAlgo(a) { algo = a; document.querySelectorAll('[data-algo]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.algo === a))); },
+    restart: () => reset(),
+  };
+  window.__bench = bench;
+
+  // -- ui --------------------------------------------------------------------
+  document.querySelectorAll('[data-algo]').forEach(btn => {
+    btn.setAttribute('aria-pressed', String(btn.dataset.algo === algo));
+    btn.onclick = () => bench.setAlgo(btn.dataset.algo);
+  });
+  const rate = el('rate'), speed = el('speed');
+  rate.value = Math.round(CFG.rate * 10);
+  el('rateOut').textContent = CFG.rate.toFixed(1) + '/s';
+  speed.value = simSpeed;
+  el('speedOut').textContent = simSpeed + 'x';
+  rate.oninput = () => { CFG.rate = +rate.value / 10; el('rateOut').textContent = CFG.rate.toFixed(1) + '/s'; };
+  speed.oninput = () => { simSpeed = +speed.value; el('speedOut').textContent = simSpeed + 'x'; };
+  el('resetBtn').onclick = () => reset();
+
+  // -- loop ------------------------------------------------------------------
+  let last = performance.now(), acc = 0, count = 0, sparkAcc = 0;
+  function frame(now) {
+    requestAnimationFrame(frame);
+    const dtReal = Math.min(0.1, (now - last) / 1000);
+    last = now;
+    const ms = dtReal * 1000;
+
+    bench.frames++;
+    bench.samples.push(ms);
+    if (bench.samples.length > 2000) bench.samples.shift();
+    if (ms > 1000 / 45) bench.slow++;
+    if (ms > bench.worst && bench.frames > 5) bench.worst = ms;
+
+    // Fixed-step simulation so results do not depend on frame rate.
+    let budget = dtReal * simSpeed;
+    const H = 1 / 30;
+    let guard = 0;
+    while (budget > 0 && guard++ < 400) { step(Math.min(H, budget)); budget -= H; }
+
+    if (!reduced || bench.frames < 3) draw();
+
+    acc += ms; count++; sparkAcc += dtReal;
+    if (acc > 400) {
+      bench.fps = 1000 / (acc / count);
+      const m = metrics();
+      el('mFps').textContent = bench.fps.toFixed(0);
+      el('mWait').textContent = m.avg.toFixed(1) + 's';
+      el('mP95').textContent = m.p95.toFixed(1) + 's';
+      el('mP95').parentElement.classList.toggle('bad', m.p95 > 90);
+      el('mServed').textContent = m.served;
+      el('mQueue').textContent = m.waiting;
+      el('mQueue').parentElement.classList.toggle('bad', m.waiting > 300);
+      el('mTput').textContent = m.tput.toFixed(0) + '/m';
+      acc = 0; count = 0;
+    }
+    if (sparkAcc > 0.5) { drawSpark(); sparkAcc = 0; }
+  }
+  requestAnimationFrame(frame);
+})();
+</script>

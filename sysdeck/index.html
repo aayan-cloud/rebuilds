@@ -1,0 +1,444 @@
+<meta charset="utf-8">
+<title>Sysdeck</title>
+<link rel="icon" href="data:,">
+<meta name="description" content="The sci-fi terminal dashboard, rebuilt for the browser. No Electron, no install.">
+<style>
+  :root {
+    --bg: #03070a; --grid: #0a1a20; --fg: #9ff5e0; --dim: #2f7f74; --hot: #ff7a5c; --warn: #ffc46b;
+    --line: #0e2a33; --glow: 0 0 12px rgba(95, 245, 220, .35);
+    font-family: "Geist Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg); height: 100vh; overflow: hidden;
+    font-size: 12px; letter-spacing: .04em;
+    background-image: radial-gradient(circle at 50% 0%, #07161c 0%, #03070a 60%);
+  }
+  /* scanlines + vignette, the whole reason this look exists */
+  body::after {
+    content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 9;
+    background: repeating-linear-gradient(0deg, rgba(0,0,0,.28) 0 1px, transparent 1px 3px);
+    mix-blend-mode: multiply;
+  }
+  body::before {
+    content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 8;
+    box-shadow: inset 0 0 160px rgba(0,0,0,.9);
+  }
+  .deck {
+    height: 100vh; padding: 14px; display: grid; gap: 12px;
+    grid-template-columns: 290px 1fr 290px;
+    grid-template-rows: auto 1fr auto;
+  }
+  .panel {
+    border: 1px solid var(--line); border-radius: 4px; padding: 10px 12px;
+    background: linear-gradient(180deg, rgba(10,26,32,.55), rgba(3,7,10,.75));
+    position: relative; overflow: hidden;
+  }
+  .panel h2 {
+    margin: 0 0 9px; font-size: 10px; font-weight: 500; letter-spacing: .24em;
+    text-transform: uppercase; color: var(--dim);
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .panel h2 span { color: var(--fg); text-shadow: var(--glow); }
+  .col { display: grid; gap: 12px; grid-auto-rows: min-content; }
+  .full { grid-column: 1 / -1; }
+  .mid { display: grid; grid-template-rows: 1fr auto; gap: 12px; min-height: 0; }
+
+  .bignum { font-size: 30px; line-height: 1; text-shadow: var(--glow); }
+  .sub { color: var(--dim); }
+  .bar { height: 6px; background: #071a1f; border: 1px solid var(--line); border-radius: 2px; overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--fg); box-shadow: var(--glow); }
+  .bar.hot i { background: var(--hot); }
+  .cores { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }
+  .core { display: grid; gap: 3px; }
+  .core .lab { color: var(--dim); font-size: 9px; }
+  canvas { display: block; width: 100%; }
+  .feed { height: 150px; overflow: hidden; display: grid; align-content: end; gap: 2px; }
+  .feed div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .feed .t { color: var(--dim); }
+  .feed .w { color: var(--warn); }
+  .feed .e { color: var(--hot); }
+  .procs { display: grid; gap: 3px; }
+  .proc { display: grid; grid-template-columns: 1fr 44px 44px; gap: 6px; }
+  .proc b { font-weight: 400; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .proc span { color: var(--dim); text-align: right; }
+  .clock { text-align: center; }
+  .clock .time { font-size: 44px; line-height: 1; text-shadow: var(--glow); }
+  .kv { display: flex; justify-content: space-between; color: var(--dim); }
+  .kv b { color: var(--fg); font-weight: 400; }
+  .status { display: flex; gap: 14px; align-items: center; justify-content: space-between; }
+  .pill { border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; color: var(--dim); }
+  .pill.on { color: var(--fg); border-color: var(--fg); text-shadow: var(--glow); }
+  @media (max-width: 1000px) {
+    .deck { grid-template-columns: 1fr; grid-template-rows: auto auto 1fr auto; overflow-y: auto; }
+    .globeWrap { height: 240px; }
+  }
+  @media (prefers-reduced-motion: reduce) { body::after { display: none; } }
+</style>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500&display=swap">
+
+<div class="deck">
+  <div class="panel full status">
+    <div><span style="color:var(--fg);text-shadow:var(--glow)">SYSDECK</span> <span class="sub">// terminal interface</span></div>
+    <div class="status" style="gap:10px">
+      <span class="pill on" id="pMode">demo telemetry</span>
+      <span class="pill" id="pUptime">up --</span>
+      <span class="pill" id="pFps">-- fps</span>
+    </div>
+  </div>
+
+  <div class="col">
+    <div class="panel">
+      <h2>processor <span id="cpuPct">0%</span></h2>
+      <div class="cores" id="cores"></div>
+    </div>
+    <div class="panel">
+      <h2>memory <span id="memPct">0%</span></h2>
+      <div class="bignum" id="memUsed">--</div>
+      <div class="sub" id="memTotal">of -- GB</div>
+      <div class="bar" style="margin-top:8px"><i id="memBar" style="width:0"></i></div>
+      <canvas id="memChart" height="52"></canvas>
+    </div>
+    <div class="panel">
+      <h2>storage</h2>
+      <div id="disks"></div>
+    </div>
+  </div>
+
+  <div class="mid">
+    <div class="panel globeWrap" style="min-height:0">
+      <h2>network <span id="netPeers">0 peers</span></h2>
+      <canvas id="globe"></canvas>
+    </div>
+    <div class="panel">
+      <h2>system log <span id="logCount">0</span></h2>
+      <div class="feed" id="feed"></div>
+    </div>
+  </div>
+
+  <div class="col">
+    <div class="panel clock">
+      <div class="time" id="clock">--:--:--</div>
+      <div class="sub" id="date">--</div>
+    </div>
+    <div class="panel">
+      <h2>throughput</h2>
+      <canvas id="netChart" height="70"></canvas>
+      <div class="kv"><span>down</span><b id="netDown">--</b></div>
+      <div class="kv"><span>up</span><b id="netUp">--</b></div>
+    </div>
+    <div class="panel">
+      <h2>processes <span id="procCount">0</span></h2>
+      <div class="procs" id="procs"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  'use strict';
+  const params = new URLSearchParams(location.search);
+  const PEAK = params.get('peak') === '1';
+  const LIVE = params.get('live') === '1';
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // Deterministic noise so the demo telemetry looks alive but reproducible.
+  let seed = 1337;
+  const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+
+  const CORES = PEAK ? 32 : 12;
+  const PROCS = PEAK ? 40 : 12;
+  const TICK = PEAK ? 60 : 250;          // telemetry update interval, ms
+  const ARCS = PEAK ? 160 : 40;
+
+  const el = id => document.getElementById(id);
+
+  // ------------------------------------------------------------------ cores
+  const coreEls = [];
+  const coresBox = el('cores');
+  for (let i = 0; i < CORES; i++) {
+    const d = document.createElement('div');
+    d.className = 'core';
+    d.innerHTML = `<div class="lab">c${String(i).padStart(2, '0')}</div><div class="bar"><i style="width:0"></i></div>`;
+    coresBox.appendChild(d);
+    coreEls.push({ bar: d.querySelector('i'), wrap: d.querySelector('.bar'), v: rnd() * 30 });
+  }
+
+  // ------------------------------------------------------------------ charts
+  function sparkline(canvas, colour) {
+    const ctx = canvas.getContext('2d');
+    const data = [];
+    return {
+      push(v, max) {
+        data.push(v);
+        if (data.length > 180) data.shift();
+        const dpr = Math.min(devicePixelRatio || 1, 2);
+        const w = canvas.clientWidth, h = canvas.height / dpr || 52;
+        if (canvas.width !== w * dpr) { canvas.width = w * dpr; canvas.height = h * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0); }
+        ctx.clearRect(0, 0, w, h);
+        ctx.beginPath();
+        ctx.moveTo(0, h);
+        data.forEach((d, i) => ctx.lineTo((i / (data.length - 1 || 1)) * w, h - (d / max) * (h - 4)));
+        ctx.lineTo(w, h);
+        ctx.closePath();
+        ctx.fillStyle = colour.replace('1)', '0.12)');
+        ctx.fill();
+        ctx.beginPath();
+        data.forEach((d, i) => {
+          const x = (i / (data.length - 1 || 1)) * w, y = h - (d / max) * (h - 4);
+          i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+        });
+        ctx.strokeStyle = colour; ctx.lineWidth = 1.4; ctx.stroke();
+      },
+    };
+  }
+  const memChart = sparkline(el('memChart'), 'rgba(95,245,220,1)');
+  const netChart = sparkline(el('netChart'), 'rgba(255,196,107,1)');
+
+  // ------------------------------------------------------------------- globe
+  // A rotating wireframe planet with traffic arcs. Canvas 2D on purpose: it
+  // must run on a phone next to everything else on this page.
+  const globe = el('globe');
+  const g = globe.getContext('2d');
+  const arcs = [];
+  const CITIES = [
+    [24.86, 67.00], [31.52, 74.35], [51.51, -0.13], [40.71, -74.01], [35.68, 139.69],
+    [1.35, 103.82], [-33.87, 151.21], [37.77, -122.42], [25.20, 55.27], [52.52, 13.40],
+    [19.08, 72.88], [-23.55, -46.63], [55.75, 37.62], [30.04, 31.24], [43.65, -79.38],
+  ];
+  function spawnArc() {
+    const a = CITIES[(rnd() * CITIES.length) | 0], b = CITIES[(rnd() * CITIES.length) | 0];
+    if (a === b) return;
+    arcs.push({ a, b, t: 0, speed: 0.25 + rnd() * 0.5, hue: rnd() > 0.85 ? 'hot' : 'norm' });
+    if (arcs.length > ARCS) arcs.shift();
+  }
+
+  let spin = 0;
+  function drawGlobe(dt) {
+    const dpr = Math.min(devicePixelRatio || 1, 2);
+    const w = globe.clientWidth, h = Math.max(160, globe.parentElement.clientHeight - 34);
+    if (globe.width !== w * dpr || globe.height !== h * dpr) {
+      globe.width = w * dpr; globe.height = h * dpr; globe.style.height = h + 'px';
+      g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    g.clearRect(0, 0, w, h);
+    const cx = w / 2, cy = h / 2, R = Math.min(w, h) * 0.42;
+    if (!reduced) spin += dt * 0.12;
+
+    const project = (lat, lon) => {
+      const la = lat * Math.PI / 180, lo = lon * Math.PI / 180 + spin;
+      const x = Math.cos(la) * Math.sin(lo), y = Math.sin(la), z = Math.cos(la) * Math.cos(lo);
+      return { x: cx + x * R, y: cy - y * R, vis: z > 0, z };
+    };
+
+    // graticule
+    g.strokeStyle = 'rgba(47,127,116,.35)'; g.lineWidth = 1;
+    for (let lat = -60; lat <= 60; lat += 30) {
+      g.beginPath();
+      for (let lon = -180; lon <= 180; lon += 6) {
+        const p = project(lat, lon);
+        if (!p.vis) { g.moveTo(p.x, p.y); continue; }
+        lon === -180 ? g.moveTo(p.x, p.y) : g.lineTo(p.x, p.y);
+      }
+      g.stroke();
+    }
+    for (let lon = -180; lon < 180; lon += 30) {
+      g.beginPath();
+      for (let lat = -90; lat <= 90; lat += 6) {
+        const p = project(lat, lon);
+        if (!p.vis) { g.moveTo(p.x, p.y); continue; }
+        lat === -90 ? g.moveTo(p.x, p.y) : g.lineTo(p.x, p.y);
+      }
+      g.stroke();
+    }
+    // limb
+    g.strokeStyle = 'rgba(95,245,220,.5)';
+    g.beginPath(); g.arc(cx, cy, R, 0, 6.283); g.stroke();
+
+    // nodes
+    for (const c of CITIES) {
+      const p = project(c[0], c[1]);
+      if (!p.vis) continue;
+      g.fillStyle = 'rgba(95,245,220,.85)';
+      g.beginPath(); g.arc(p.x, p.y, 1.8, 0, 6.283); g.fill();
+    }
+
+    // arcs
+    for (const arc of arcs) {
+      arc.t = Math.min(1, arc.t + dt * arc.speed);
+      const steps = 24;
+      g.strokeStyle = arc.hue === 'hot' ? 'rgba(255,122,92,.7)' : 'rgba(95,245,220,.45)';
+      g.lineWidth = arc.hue === 'hot' ? 1.4 : 1;
+      g.beginPath();
+      let started = false;
+      for (let i = 0; i <= steps * arc.t; i++) {
+        const f = i / steps;
+        const lat = arc.a[0] + (arc.b[0] - arc.a[0]) * f;
+        const lon = arc.a[1] + (arc.b[1] - arc.a[1]) * f;
+        const lift = 1 + Math.sin(f * Math.PI) * 0.22;
+        const la = lat * Math.PI / 180, lo = lon * Math.PI / 180 + spin;
+        const x = Math.cos(la) * Math.sin(lo) * lift, y = Math.sin(la) * lift, z = Math.cos(la) * Math.cos(lo);
+        if (z < -0.1) { started = false; continue; }
+        const px = cx + x * R, py = cy - y * R;
+        started ? g.lineTo(px, py) : g.moveTo(px, py);
+        started = true;
+      }
+      g.stroke();
+    }
+    for (let i = arcs.length - 1; i >= 0; i--) if (arcs[i].t >= 1 && rnd() > 0.95) arcs.splice(i, 1);
+  }
+
+  // ------------------------------------------------------------------ feed
+  const feed = el('feed');
+  let logCount = 0;
+  const WORDS = ['handshake', 'route', 'cache', 'index', 'packet', 'session', 'daemon', 'socket', 'kernel', 'buffer'];
+  const HOSTS = ['node-07', 'edge-ka', 'core-01', 'relay-3', 'gw-north'];
+  function pushLog(kind, text) {
+    const d = document.createElement('div');
+    const t = new Date().toISOString().slice(11, 19);
+    d.innerHTML = `<span class="t">${t}</span> ${text}`;
+    if (kind) d.classList.add(kind);
+    feed.appendChild(d);
+    while (feed.children.length > 40) feed.removeChild(feed.firstChild);
+    el('logCount').textContent = ++logCount;
+  }
+
+  // -------------------------------------------------------------- processes
+  const PROC_NAMES = ['llama-server', 'chrome', 'node', 'python', 'Hermes', 'explorer', 'dwm',
+    'code', 'ffmpeg', 'obs64', 'nvidia-smi', 'uv', 'git', 'n8n', 'valorant'];
+  const procs = Array.from({ length: PROCS }, (_, i) => ({
+    name: PROC_NAMES[i % PROC_NAMES.length] + (i >= PROC_NAMES.length ? '-' + i : ''),
+    cpu: rnd() * 30, mem: rnd() * 1800,
+  }));
+  function drawProcs() {
+    procs.forEach(p => {
+      p.cpu = Math.max(0, Math.min(100, p.cpu + (rnd() - 0.5) * 9));
+      p.mem = Math.max(40, p.mem + (rnd() - 0.5) * 60);
+    });
+    const top = procs.slice().sort((a, b) => b.cpu - a.cpu).slice(0, PEAK ? 16 : 9);
+    el('procs').innerHTML = top.map(p =>
+      `<div class="proc"><b>${p.name}</b><span>${p.cpu.toFixed(0)}%</span><span>${(p.mem / 1024).toFixed(1)}G</span></div>`).join('');
+    el('procCount').textContent = procs.length;
+  }
+
+  // ------------------------------------------------------------------ disks
+  const DISKS = [{ n: 'C:', t: 931, u: 612 }, { n: 'D:', t: 1863, u: 1204 }];
+  el('disks').innerHTML = DISKS.map(d => `
+    <div class="kv" style="margin-top:6px"><span>${d.n}</span><b>${d.u} / ${d.t} GB</b></div>
+    <div class="bar"><i style="width:${(d.u / d.t * 100).toFixed(0)}%"></i></div>`).join('');
+
+  // ----------------------------------------------------------------- telemetry
+  const state = { mem: 9.2, memTotal: 15.6, down: 0, up: 0, started: performance.now() };
+
+  async function live() {
+    if (!LIVE) return null;
+    try {
+      const r = await fetch('http://127.0.0.1:8799/stats', { cache: 'no-store' });
+      if (r.ok) return await r.json();
+    } catch (e) { /* fall back to demo numbers */ }
+    return null;
+  }
+
+  async function telemetry() {
+    const data = await live();
+    if (data) {
+      el('pMode').textContent = 'live telemetry';
+      state.mem = data.memory.usedGB;
+      state.memTotal = data.memory.totalGB;
+      data.cpu.perCore.slice(0, CORES).forEach((v, i) => { if (coreEls[i]) coreEls[i].v = v; });
+      state.down = data.net.downMbps; state.up = data.net.upMbps;
+    } else {
+      coreEls.forEach(c => {
+        const target = rnd() > 0.93 ? 60 + rnd() * 40 : rnd() * 35;
+        c.v += (target - c.v) * 0.25;
+      });
+      state.mem = Math.max(2, Math.min(state.memTotal, state.mem + (rnd() - 0.48) * 0.35));
+      state.down = Math.max(0, state.down + (rnd() - 0.5) * 9);
+      state.up = Math.max(0, state.up + (rnd() - 0.5) * 3);
+    }
+
+    let sum = 0;
+    coreEls.forEach(c => {
+      sum += c.v;
+      c.bar.style.width = c.v.toFixed(0) + '%';
+      c.wrap.classList.toggle('hot', c.v > 80);
+    });
+    const cpuPct = sum / coreEls.length;
+    el('cpuPct').textContent = cpuPct.toFixed(0) + '%';
+
+    const memPct = (state.mem / state.memTotal) * 100;
+    el('memPct').textContent = memPct.toFixed(0) + '%';
+    el('memUsed').textContent = state.mem.toFixed(1) + ' GB';
+    el('memTotal').textContent = 'of ' + state.memTotal.toFixed(1) + ' GB';
+    el('memBar').style.width = memPct + '%';
+    memChart.push(memPct, 100);
+    netChart.push(state.down, 120);
+    el('netDown').textContent = state.down.toFixed(1) + ' Mb/s';
+    el('netUp').textContent = state.up.toFixed(1) + ' Mb/s';
+    el('netPeers').textContent = arcs.length + ' peers';
+
+    if (rnd() > 0.55) spawnArc();
+    if (rnd() > 0.45) {
+      const kind = rnd() > 0.93 ? 'e' : rnd() > 0.8 ? 'w' : '';
+      const host = HOSTS[(rnd() * HOSTS.length) | 0];
+      const word = WORDS[(rnd() * WORDS.length) | 0];
+      pushLog(kind, `${host} ${word} ${(rnd() * 9000 | 0)} ${kind === 'e' ? 'failed' : kind === 'w' ? 'retry' : 'ok'}`);
+    }
+    drawProcs();
+  }
+
+  // -------------------------------------------------------------------- loop
+  const bench = {
+    frames: 0, fps: 0, slow: 0, worst: 0, samples: [], ticks: 0,
+    get memoryMB() { return performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : null; },
+    report() {
+      const s = this.samples.slice().sort((a, b) => a - b);
+      const pct = p => s.length ? +s[Math.min(s.length - 1, Math.floor(s.length * p))].toFixed(2) : null;
+      return {
+        frames: this.frames, fps: +this.fps.toFixed(1), medianFrameMs: pct(0.5),
+        p95FrameMs: pct(0.95), worstFrameMs: +this.worst.toFixed(2), slowFrames: this.slow,
+        cores: CORES, processes: procs.length, arcs: arcs.length,
+        telemetryTicks: this.ticks, tickMs: TICK, domNodes: document.querySelectorAll('*').length,
+        memoryMB: this.memoryMB,
+      };
+    },
+    reset() { this.frames = 0; this.slow = 0; this.worst = 0; this.samples = []; this.ticks = 0; },
+  };
+  window.__bench = bench;
+
+  let last = performance.now(), acc = 0, count = 0, telAcc = 0;
+  function frame(now) {
+    requestAnimationFrame(frame);
+    const dt = Math.min(0.1, (now - last) / 1000);
+    last = now;
+    const ms = dt * 1000;
+
+    bench.frames++;
+    bench.samples.push(ms);
+    if (bench.samples.length > 2000) bench.samples.shift();
+    if (ms > 1000 / 45) bench.slow++;
+    if (ms > bench.worst && bench.frames > 5) bench.worst = ms;
+
+    drawGlobe(dt);
+
+    telAcc += ms;
+    if (telAcc >= TICK) { telAcc = 0; bench.ticks++; telemetry(); }
+
+    const d = new Date();
+    el('clock').textContent = d.toTimeString().slice(0, 8);
+    el('date').textContent = d.toDateString();
+    el('pUptime').textContent = 'up ' + ((performance.now() - state.started) / 1000).toFixed(0) + 's';
+
+    acc += ms; count++;
+    if (acc > 450) {
+      bench.fps = 1000 / (acc / count);
+      el('pFps').textContent = bench.fps.toFixed(0) + ' fps';
+      el('pFps').classList.toggle('on', bench.fps > 45);
+      acc = 0; count = 0;
+    }
+  }
+  pushLog('', 'sysdeck online');
+  requestAnimationFrame(frame);
+})();
+</script>

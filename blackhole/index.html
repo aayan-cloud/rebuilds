@@ -1,0 +1,453 @@
+<meta charset="utf-8">
+<title>Event Horizon</title>
+<link rel="icon" href="data:,">
+<meta name="description" content="A physically accurate Schwarzschild black hole you can orbit, in one HTML file.">
+<style>
+  :root {
+    --bg: #05060a; --fg: #e8eaf0; --dim: #8b91a5; --line: #1d2130; --accent: #ff9d4d;
+    font-family: Geist, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; touch-action: none; cursor: grab; }
+  canvas.dragging { cursor: grabbing; }
+
+  .hud { position: fixed; pointer-events: none; font-size: 12px; letter-spacing: .02em; }
+  .hud a, .hud button, .hud input { pointer-events: auto; }
+
+  .title { top: 22px; left: 24px; }
+  .title h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: .18em; text-transform: uppercase; }
+  .title p { margin: 6px 0 0; color: var(--dim); max-width: 34ch; line-height: 1.5; }
+
+  .panel {
+    bottom: 22px; left: 24px; display: grid; gap: 10px;
+    background: color-mix(in srgb, var(--bg) 72%, transparent);
+    border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px;
+    backdrop-filter: blur(8px); min-width: 232px;
+  }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+  .row label { color: var(--dim); }
+  .row output, .stat b { font-family: "Geist Mono", ui-monospace, "Cascadia Code", monospace; font-weight: 500; }
+  input[type=range] { width: 108px; accent-color: var(--accent); }
+  button {
+    font: inherit; color: var(--fg); background: transparent; cursor: pointer;
+    border: 1px solid var(--line); border-radius: 7px; padding: 5px 10px;
+  }
+  button[aria-pressed=true] { border-color: var(--accent); color: var(--accent); }
+  button:hover { border-color: var(--dim); }
+
+  .stats { top: 22px; right: 24px; text-align: right; display: grid; gap: 4px; color: var(--dim); }
+  .stat b { color: var(--fg); margin-left: 8px; }
+  .stat.warn b { color: #ff6b6b; }
+
+  .hint { bottom: 24px; right: 24px; color: var(--dim); text-align: right; line-height: 1.6; }
+  kbd {
+    font-family: "Geist Mono", ui-monospace, monospace; font-size: 11px;
+    border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px;
+  }
+  @media (max-width: 720px) {
+    .title p, .hint { display: none; }
+    .panel { left: 12px; right: 12px; bottom: 12px; min-width: 0; }
+    .stats { right: 12px; top: 14px; }
+  }
+</style>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
+
+<canvas id="gl"></canvas>
+
+<div class="hud title">
+  <h1>Event Horizon</h1>
+  <p>A non-rotating black hole, rendered by integrating photon paths through curved spacetime. Light bends, the disk in front and behind is one ring, and the approaching side is brighter because it is coming at you.</p>
+</div>
+
+<div class="hud stats">
+  <div class="stat">fps <b id="fps">--</b></div>
+  <div class="stat">steps/ray <b id="steps">--</b></div>
+  <div class="stat">render <b id="res">--</b></div>
+  <div class="stat" id="modeStat" hidden>mode <b id="mode">peak</b></div>
+</div>
+
+<div class="hud panel">
+  <div class="row">
+    <label for="quality">quality</label>
+    <input id="quality" type="range" min="40" max="600" step="10" value="200">
+    <output id="qualityOut">200</output>
+  </div>
+  <div class="row">
+    <label for="spin">orbit speed</label>
+    <input id="spin" type="range" min="0" max="100" step="1" value="18">
+    <output id="spinOut">0.18</output>
+  </div>
+  <div class="row">
+    <button id="diskBtn" aria-pressed="true">accretion disk</button>
+    <button id="autoBtn" aria-pressed="true">auto quality</button>
+  </div>
+</div>
+
+<div class="hud hint">
+  drag to orbit &middot; scroll to fall in<br>
+  <kbd>P</kbd> peak load &middot; <kbd>R</kbd> reset
+</div>
+
+<script type="x-shader/x-fragment" id="frag">#version 300 es
+precision highp float;
+
+uniform vec2  uRes;
+uniform vec3  uCam;       // camera position, units of Schwarzschild radii
+uniform mat3  uBasis;     // camera orientation
+uniform float uTime;
+uniform int   uSteps;     // integration steps per ray
+uniform float uDisk;      // 0..1 accretion disk opacity
+out vec4 outColor;
+
+const float PI = 3.14159265359;
+const float RS = 1.0;          // Schwarzschild radius, our unit of length
+const float DISK_IN = 3.0;     // innermost stable circular orbit = 3 Rs
+const float DISK_OUT = 12.0;
+const float ESCAPE = 60.0;
+
+// -- cheap hash noise, used for stars and disk texture -----------------------
+float hash(vec3 p) {
+  p = fract(p * 0.3183099 + vec3(0.71, 0.113, 0.419));
+  p *= 17.0;
+  return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+}
+
+// Starfield sampled by direction. Three octaves of cells so stars have
+// different sizes without needing a texture.
+vec3 stars(vec3 dir) {
+  vec3 col = vec3(0.0);
+  for (int o = 0; o < 3; o++) {
+    float scale = 180.0 * pow(2.2, float(o));
+    vec3 cell = floor(dir * scale);
+    float h = hash(cell);
+    if (h > 0.9965) {
+      vec3 centre = (cell + 0.5) / scale;
+      float d = length(normalize(centre) - dir) * scale;
+      float bright = smoothstep(1.2, 0.0, d) * (0.35 + 0.65 * hash(cell + 3.1));
+      // slight colour temperature variation
+      vec3 tint = mix(vec3(0.75, 0.83, 1.0), vec3(1.0, 0.88, 0.72), hash(cell + 7.7));
+      col += tint * bright * (1.0 - 0.25 * float(o));
+    }
+  }
+  // faint galactic band so the sky is not pure black
+  float band = exp(-pow(dir.y * 2.6, 2.0)) * 0.05;
+  col += vec3(0.10, 0.12, 0.22) * band;
+  return col;
+}
+
+// Blackbody-ish ramp for the disk: hot and blue-white inside, orange outside.
+vec3 diskColour(float r) {
+  float t = clamp((r - DISK_IN) / (DISK_OUT - DISK_IN), 0.0, 1.0);
+  vec3 hot = vec3(1.05, 0.95, 0.85);
+  vec3 mid = vec3(1.00, 0.62, 0.26);
+  vec3 cool = vec3(0.72, 0.22, 0.08);
+  return t < 0.5 ? mix(hot, mid, t * 2.0) : mix(mid, cool, (t - 0.5) * 2.0);
+}
+
+void main() {
+  vec2 uv = (gl_FragCoord.xy - 0.5 * uRes) / uRes.y;
+  vec3 dir = normalize(uBasis * vec3(uv, -1.3));
+  vec3 pos = uCam;
+
+  float r0 = length(pos);
+  vec3 e1 = pos / r0;                        // radial unit vector
+  vec3 n  = cross(e1, dir);
+  float nl = length(n);
+  if (nl < 1e-6) { outColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
+  n /= nl;
+  vec3 e2 = normalize(cross(n, e1));         // in-plane, perpendicular to e1
+
+  // Photon orbits in the plane spanned by (e1, e2). Integrate the standard
+  // Schwarzschild light-bending equation  u'' = -u + 1.5 * Rs * u^2  in u = 1/r.
+  float cosA = dot(dir, e1);
+  float sinA = dot(dir, e2);
+  float u = 1.0 / r0;
+  float du = -u * cosA / max(sinA, 1e-6);    // u' = -u / tan(alpha)
+
+  float dphi = 2.4 * PI / float(uSteps);
+  float phi = 0.0;
+  vec3 acc = vec3(0.0);                      // accumulated disk emission
+  float transmit = 1.0;
+  float prevY = dot(pos, vec3(0.0, 1.0, 0.0));
+  float prevR = r0;
+
+  for (int i = 0; i < 1024; i++) {
+    if (i >= uSteps) break;
+
+    // RK2 on (u, du) for stability at large deflection
+    float k1u = du;
+    float k1d = -u + 1.5 * RS * u * u;
+    float um = u + 0.5 * dphi * k1u;
+    float dm = du + 0.5 * dphi * k1d;
+    float k2u = dm;
+    float k2d = -um + 1.5 * RS * um * um;
+    u  += dphi * k2u;
+    du += dphi * k2d;
+    phi += dphi;
+
+    if (u <= 0.0) break;                     // escaped to infinity
+    float r = 1.0 / u;
+    if (r <= RS * 1.001) {                   // crossed the horizon
+      outColor = vec4(acc, 1.0);
+      return;
+    }
+
+    vec3 p = (cos(phi) * e1 + sin(phi) * e2) * r;
+    float y = p.y;
+
+    // Disk crossing: y changed sign between steps, inside the annulus.
+    if (uDisk > 0.0 && prevY * y < 0.0) {
+      float t = prevY / (prevY - y);
+      float rHit = mix(prevR, r, t);
+      if (rHit > DISK_IN && rHit < DISK_OUT) {
+        vec3 hitP = (cos(phi - dphi * (1.0 - t)) * e1 + sin(phi - dphi * (1.0 - t)) * e2) * rHit;
+        vec3 hitDir = normalize(hitP);
+
+        // Keplerian orbital speed in units of c, and the direction of motion.
+        float v = sqrt(0.5 * RS / rHit);
+        vec3 vel = normalize(cross(vec3(0.0, 1.0, 0.0), hitDir)) * v;
+        vec3 toCam = normalize(uCam - hitP);
+
+        // Relativistic Doppler beaming towards the observer.
+        float gamma = 1.0 / sqrt(max(1.0 - v * v, 1e-4));
+        float dop = 1.0 / max(gamma * (1.0 - dot(vel, toCam)), 1e-3);
+        float beam = pow(dop, 3.0);
+
+        // Gravitational redshift climbing out of the well.
+        float grav = sqrt(max(1.0 - RS / rHit, 1e-4));
+
+        // Emission falls off outward; add banding so rotation is visible.
+        float fall = pow(DISK_IN / rHit, 2.0);
+        float ang = atan(hitP.z, hitP.x);
+        float bands = 0.82 + 0.18 * sin(ang * 7.0 + uTime * (1.6 / pow(rHit, 1.5)) * 6.0
+                                        + rHit * 1.7);
+        float grain = 0.88 + 0.12 * hash(vec3(floor(ang * 26.0), floor(rHit * 9.0), 1.0));
+
+        vec3 emit = diskColour(rHit) * fall * bands * grain * beam * grav * 2.1;
+        float alpha = clamp(uDisk * 0.92, 0.0, 1.0);
+        acc += transmit * emit * alpha;
+        transmit *= (1.0 - alpha);
+        if (transmit < 0.02) { outColor = vec4(acc, 1.0); return; }
+      }
+    }
+
+    prevY = y;
+    prevR = r;
+
+    if (r > ESCAPE) {                        // out to the sky
+      vec3 outDir = normalize(p - (cos(phi - dphi) * e1 + sin(phi - dphi) * e2) * prevR);
+      acc += transmit * stars(outDir);
+      outColor = vec4(acc, 1.0);
+      return;
+    }
+  }
+
+  outColor = vec4(acc, 1.0);
+}
+</script>
+
+<script>
+(() => {
+  'use strict';
+  const params = new URLSearchParams(location.search);
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const canvas = document.getElementById('gl');
+  const gl = canvas.getContext('webgl2', { antialias: false, powerPreference: 'high-performance' });
+
+  if (!gl) {
+    document.body.innerHTML = '<p style="padding:32px;font:14px system-ui">This needs WebGL2.</p>';
+    return;
+  }
+
+  const VERT = `#version 300 es
+  void main() {
+    vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+    gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+  }`;
+
+  function compile(type, src) {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+    return s;
+  }
+  const prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, VERT));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, document.getElementById('frag').textContent.trim()));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+  gl.useProgram(prog);
+
+  const U = {};
+  for (const name of ['uRes', 'uCam', 'uBasis', 'uTime', 'uSteps', 'uDisk']) {
+    U[name] = gl.getUniformLocation(prog, name);
+  }
+
+  // -- camera ---------------------------------------------------------------
+  const view = { dist: 18, yaw: 0.6, pitch: 0.32, spin: 0.18, disk: 1 };
+  const DEFAULT = { ...view };
+
+  function basis() {
+    // Camera looks at the origin; build an orthonormal frame around that.
+    const cp = Math.cos(view.pitch), sp = Math.sin(view.pitch);
+    const cy = Math.cos(view.yaw), sy = Math.sin(view.yaw);
+    const pos = [view.dist * cp * sy, view.dist * sp, view.dist * cp * cy];
+    const fwd = pos.map(v => -v / view.dist);
+    let up = [0, 1, 0];
+    const right = [
+      fwd[1] * up[2] - fwd[2] * up[1],
+      fwd[2] * up[0] - fwd[0] * up[2],
+      fwd[0] * up[1] - fwd[1] * up[0],
+    ];
+    const rl = Math.hypot(...right);
+    const r = right.map(v => v / rl);
+    up = [
+      r[1] * fwd[2] - r[2] * fwd[1],
+      r[2] * fwd[0] - r[0] * fwd[2],
+      r[0] * fwd[1] - r[1] * fwd[0],
+    ];
+    // column-major mat3: [right, up, -forward]
+    return { pos, m: [r[0], r[1], r[2], up[0], up[1], up[2], -fwd[0], -fwd[1], -fwd[2]] };
+  }
+
+  // -- quality --------------------------------------------------------------
+  const small = matchMedia('(max-width: 720px)').matches;
+  const state = {
+    steps: +(params.get('steps') || (small ? 120 : 200)),
+    scale: +(params.get('scale') || (small ? 0.65 : 0.85)),
+    auto: params.get('auto') !== '0',
+    peak: params.get('peak') === '1',
+  };
+
+  if (state.peak) {                       // worst case on purpose
+    state.steps = 600;
+    state.scale = 1;
+    state.auto = false;
+    view.spin = 0.5;
+    document.getElementById('modeStat').hidden = false;
+  }
+
+  function resize() {
+    const dpr = Math.min(devicePixelRatio || 1, state.peak ? 2 : 1.75);
+    const w = Math.max(1, Math.round(innerWidth * dpr * state.scale));
+    const h = Math.max(1, Math.round(innerHeight * dpr * state.scale));
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w; canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+    resEl.textContent = w + '×' + h;
+  }
+
+  // -- ui -------------------------------------------------------------------
+  const fpsEl = document.getElementById('fps');
+  const stepsEl = document.getElementById('steps');
+  const resEl = document.getElementById('res');
+  const qual = document.getElementById('quality');
+  const qualOut = document.getElementById('qualityOut');
+  const spin = document.getElementById('spin');
+  const spinOut = document.getElementById('spinOut');
+  const diskBtn = document.getElementById('diskBtn');
+  const autoBtn = document.getElementById('autoBtn');
+
+  qual.value = state.steps; qualOut.textContent = state.steps;
+  spin.value = Math.round(view.spin * 100); spinOut.textContent = view.spin.toFixed(2);
+  autoBtn.setAttribute('aria-pressed', String(state.auto));
+
+  qual.oninput = () => { state.steps = +qual.value; qualOut.textContent = qual.value; state.auto = false; autoBtn.setAttribute('aria-pressed', 'false'); };
+  spin.oninput = () => { view.spin = +spin.value / 100; spinOut.textContent = view.spin.toFixed(2); };
+  diskBtn.onclick = () => { view.disk = view.disk ? 0 : 1; diskBtn.setAttribute('aria-pressed', String(!!view.disk)); };
+  autoBtn.onclick = () => { state.auto = !state.auto; autoBtn.setAttribute('aria-pressed', String(state.auto)); };
+
+  addEventListener('keydown', e => {
+    if (e.key === 'p' || e.key === 'P') { location.search = '?peak=1'; }
+    if (e.key === 'r' || e.key === 'R') { Object.assign(view, DEFAULT); spin.value = view.spin * 100; }
+  });
+
+  let dragging = false, lastX = 0, lastY = 0;
+  canvas.addEventListener('pointerdown', e => {
+    dragging = true; lastX = e.clientX; lastY = e.clientY;
+    canvas.classList.add('dragging'); canvas.setPointerCapture(e.pointerId);
+  });
+  canvas.addEventListener('pointermove', e => {
+    if (!dragging) return;
+    view.yaw -= (e.clientX - lastX) * 0.006;
+    view.pitch = Math.max(-1.45, Math.min(1.45, view.pitch + (e.clientY - lastY) * 0.005));
+    lastX = e.clientX; lastY = e.clientY;
+  });
+  const endDrag = () => { dragging = false; canvas.classList.remove('dragging'); };
+  canvas.addEventListener('pointerup', endDrag);
+  canvas.addEventListener('pointercancel', endDrag);
+  canvas.addEventListener('wheel', e => {
+    e.preventDefault();
+    view.dist = Math.max(3.2, Math.min(60, view.dist * (1 + Math.sign(e.deltaY) * 0.08)));
+  }, { passive: false });
+
+  // -- frame loop -----------------------------------------------------------
+  const bench = {
+    frames: 0, fps: 0, slow: 0, worst: 0, samples: [],
+    get memoryMB() {
+      return performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : null;
+    },
+    report() {
+      const s = this.samples.slice().sort((a, b) => a - b);
+      const pct = p => s.length ? +s[Math.min(s.length - 1, Math.floor(s.length * p))].toFixed(2) : null;
+      return {
+        frames: this.frames, fps: +this.fps.toFixed(1),
+        medianFrameMs: pct(0.5), p95FrameMs: pct(0.95), worstFrameMs: +this.worst.toFixed(2),
+        slowFrames: this.slow, steps: state.steps,
+        resolution: canvas.width + 'x' + canvas.height, memoryMB: this.memoryMB,
+      };
+    },
+    reset() { this.frames = 0; this.slow = 0; this.worst = 0; this.samples = []; },
+  };
+  window.__bench = bench;
+
+  let t0 = performance.now(), acc = 0, count = 0, clock = 0, lastFrame = t0;
+
+  function draw(now) {
+    requestAnimationFrame(draw);
+    const dt = Math.min(0.1, (now - lastFrame) / 1000);
+    lastFrame = now;
+    const ms = dt * 1000;
+
+    bench.frames++;
+    bench.samples.push(ms);
+    if (bench.samples.length > 2000) bench.samples.shift();
+    if (ms > 1000 / 45) bench.slow++;
+    if (ms > bench.worst && bench.frames > 5) bench.worst = ms;
+
+    if (!reduced) clock += dt * view.spin;
+    if (!dragging && !reduced) view.yaw += dt * view.spin * 0.25;
+
+    resize();
+    const b = basis();
+    gl.uniform2f(U.uRes, canvas.width, canvas.height);
+    gl.uniform3f(U.uCam, b.pos[0], b.pos[1], b.pos[2]);
+    gl.uniformMatrix3fv(U.uBasis, false, b.m);
+    gl.uniform1f(U.uTime, clock);
+    gl.uniform1i(U.uSteps, state.steps | 0);
+    gl.uniform1f(U.uDisk, view.disk);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    acc += ms; count++;
+    if (acc > 500) {
+      bench.fps = 1000 / (acc / count);
+      fpsEl.textContent = bench.fps.toFixed(0);
+      fpsEl.parentElement.classList.toggle('warn', bench.fps < 30);
+      stepsEl.textContent = state.steps;
+      acc = 0; count = 0;
+
+      // Auto quality: hold 60fps by trading integration steps, never below 60.
+      if (state.auto) {
+        if (bench.fps < 52 && state.steps > 60) state.steps = Math.max(60, state.steps - 20);
+        else if (bench.fps > 88 && state.steps < 420) state.steps += 20;
+        qual.value = state.steps; qualOut.textContent = state.steps;
+      }
+    }
+  }
+  requestAnimationFrame(draw);
+})();
+</script>

@@ -1,0 +1,102 @@
+<meta charset="utf-8">
+<title>Rebuilds</title>
+<meta name="description" content="Ten dead or trending projects, rebuilt as single files that run in a browser.">
+<style>
+  :root {
+    --bg: #0a0c11; --card: #10131a; --fg: #edf0f6; --dim: #8a92a6; --line: #1d2230; --accent: #7dd3a0;
+    font-family: Geist, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #f5f6f9; --card: #fff; --fg: #11131a; --dim: #5b6377; --line: #e1e4eb; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); padding: 48px 22px 80px; }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+  header { margin-bottom: 34px; }
+  h1 { margin: 0; font-size: clamp(26px, 5vw, 42px); letter-spacing: -.02em; }
+  header p { margin: 12px 0 0; color: var(--dim); max-width: 62ch; line-height: 1.6; font-size: 15px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 14px; }
+  a.card {
+    display: block; text-decoration: none; color: inherit; background: var(--card);
+    border: 1px solid var(--line); border-radius: 14px; padding: 18px 19px;
+    transition: border-color .15s, transform .15s;
+  }
+  a.card:hover { border-color: var(--accent); transform: translateY(-2px); }
+  @media (prefers-reduced-motion: reduce) { a.card:hover { transform: none; } }
+  .card h2 { margin: 0 0 6px; font-size: 17px; letter-spacing: -.01em; }
+  .card p { margin: 0; font-size: 13px; color: var(--dim); line-height: 1.55; }
+  .card .of {
+    margin-top: 12px; font-size: 11px; color: var(--dim);
+    font-family: "Geist Mono", ui-monospace, monospace; display: flex; justify-content: space-between; gap: 10px;
+  }
+  .card .of b { color: var(--accent); font-weight: 500; }
+  footer { margin-top: 40px; color: var(--dim); font-size: 13px; line-height: 1.7; }
+  code { font-family: "Geist Mono", ui-monospace, monospace; background: color-mix(in srgb, var(--line) 60%, transparent); padding: 2px 6px; border-radius: 5px; }
+</style>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
+
+<div class="wrap">
+  <header>
+    <h1>Rebuilds</h1>
+    <p>Ten projects that were either abandoned or briefly famous, rebuilt as single HTML files. No build step, no dependencies to install, no accounts. Each one runs from a browser and holds 60fps on a mid-range phone. Add <code>?peak=1</code> to any of them to see it under deliberate overload.</p>
+  </header>
+
+  <div class="grid">
+    <a class="card" href="blackhole/">
+      <h2>Event Horizon</h2>
+      <p>A non-rotating black hole with real light-bending, Doppler beaming and gravitational redshift. Orbit it, fall towards it.</p>
+      <div class="of"><span>after <b>a 477-point Show HN</b></span><span>WebGL2</span></div>
+    </a>
+    <a class="card" href="lightspeed/">
+      <h2>Slow Light</h2>
+      <p>A street where light travels at 5 km/h. Walking speed bends the world, shifts its colour and slows your watch.</p>
+      <div class="of"><span>after <b>a 630-point Show HN</b></span><span>WebGL2</span></div>
+    </a>
+    <a class="card" href="satellites/">
+      <h2>Overhead</h2>
+      <p>Every tracked satellite, propagated from real orbital elements in your browser. Click one to trace its next ninety minutes.</p>
+      <div class="of"><span>after <b>gods-eye-view, 38k stars</b></span><span>Three.js</span></div>
+    </a>
+    <a class="card" href="elevators/">
+      <h2>Lift Logic</h2>
+      <p>Four dispatch algorithms, one building, identical arrivals. Watch which one leaves people waiting.</p>
+      <div class="of"><span>after <b>a 1,680-point Show HN</b></span><span>Canvas</span></div>
+    </a>
+    <a class="card" href="sysdeck/">
+      <h2>Sysdeck</h2>
+      <p>The sci-fi terminal dashboard, without Electron. Runs in a tab, on a phone, on a spare monitor.</p>
+      <div class="of"><span>after <b>eDEX-UI, archived, 45k stars</b></span><span>Canvas</span></div>
+    </a>
+    <a class="card" href="recorder/">
+      <h2>Cleanshot</h2>
+      <p>Screen recording that zooms itself towards whatever is moving, on a soft backdrop. Nothing uploads, nothing is watermarked.</p>
+      <div class="of"><span>after <b>openscreen, archived, 40k stars</b></span><span>MediaRecorder</span></div>
+    </a>
+    <a class="card" href="deck/">
+      <h2>Onefile</h2>
+      <p>A presentation that is one HTML file. Edit in place, and it saves a copy of itself with your text inside.</p>
+      <div class="of"><span>after <b>Bento, 1,033-point Show HN</b></span><span>No deps</span></div>
+    </a>
+    <a class="card" href="dashboard/">
+      <h2>Machine</h2>
+      <p>Live GPU, memory, model server and vault stats for this PC, in one page that refreshes every second.</p>
+      <div class="of"><span>after <b>linux-dash, stale, 10k stars</b></span><span>Python agent</span></div>
+    </a>
+    <a class="card" href="drop/">
+      <h2>Toss</h2>
+      <p>Send a file device to device. Swap one code, then the browsers talk directly. No server ever sees the file.</p>
+      <div class="of"><span>after <b>Snapdrop</b></span><span>WebRTC</span></div>
+    </a>
+    <a class="card" href="agent/">
+      <h2>Localmind</h2>
+      <p>An agent that plans a goal, works through its own task list and streams the result, using a model on this machine. No API key exists.</p>
+      <div class="of"><span>after <b>AgentGPT, archived, 36k stars</b></span><span>Local LLM</span></div>
+    </a>
+  </div>
+
+  <footer>
+    Every page exposes <code>window.__bench.report()</code>, so the numbers in the benchmark come from the pages themselves rather than a stopwatch.<br>
+    Two pages want a local helper: <code>Machine</code> reads <code>dashboard/server.py</code>, and <code>Localmind</code> talks to a llama-server on port 18500. Both fall back to a working demo without them.
+  </footer>
+</div>

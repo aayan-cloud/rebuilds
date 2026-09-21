@@ -1,0 +1,516 @@
+<meta charset="utf-8">
+<title>Overhead</title>
+<link rel="icon" href="data:,">
+<meta name="description" content="Every satellite above you, propagated from real orbital elements, in the browser.">
+<style>
+  :root {
+    --bg: #04060c; --fg: #e8ecf4; --dim: #7f879c; --line: #161b28; --accent: #5ee0c0;
+    font-family: Geist, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); overflow: hidden; }
+  canvas { display: block; }
+
+  .hud { position: fixed; font-size: 12px; pointer-events: none; z-index: 2; }
+  .hud button, .hud input, .hud select { pointer-events: auto; }
+  .title { top: 20px; left: 22px; max-width: 32ch; }
+  .title h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: .18em; text-transform: uppercase; }
+  .title p { margin: 6px 0 0; color: var(--dim); line-height: 1.5; }
+  .src { margin-top: 8px; color: var(--dim); font-family: "Geist Mono", ui-monospace, monospace; font-size: 11px; }
+  .src b { color: var(--accent); font-weight: 500; }
+
+  .stats { top: 20px; right: 22px; text-align: right; display: grid; gap: 5px; color: var(--dim); }
+  .stats b { color: var(--fg); margin-left: 10px; font-family: "Geist Mono", ui-monospace, monospace; font-weight: 500; }
+  .stats .warn b { color: #ff6b6b; }
+
+  .panel {
+    left: 22px; bottom: 22px; display: grid; gap: 11px; min-width: 260px;
+    background: color-mix(in srgb, var(--bg) 72%, transparent);
+    border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; backdrop-filter: blur(8px);
+  }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--dim); }
+  .row output { color: var(--fg); font-family: "Geist Mono", ui-monospace, monospace; }
+  input[type=range] { width: 120px; accent-color: var(--accent); }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  button {
+    font: inherit; font-size: 11px; color: var(--fg); background: transparent; cursor: pointer;
+    border: 1px solid var(--line); border-radius: 7px; padding: 5px 9px;
+  }
+  button[aria-pressed=true] { border-color: var(--accent); color: var(--accent); }
+  button:hover { border-color: var(--dim); }
+
+  .selected {
+    right: 22px; bottom: 22px; min-width: 210px; display: none; gap: 5px;
+    background: color-mix(in srgb, var(--bg) 72%, transparent);
+    border: 1px solid var(--line); border-radius: 12px; padding: 13px 15px; backdrop-filter: blur(8px);
+  }
+  .selected.on { display: grid; }
+  .selected h2 { margin: 0 0 4px; font-size: 13px; font-weight: 600; }
+  .selected .kv { display: flex; justify-content: space-between; color: var(--dim); }
+  .selected .kv b { color: var(--fg); font-family: "Geist Mono", ui-monospace, monospace; font-weight: 500; }
+  .legend { display: flex; gap: 12px; color: var(--dim); font-size: 11px; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+  @media (max-width: 760px) {
+    .title p { display: none; }
+    .panel { left: 10px; right: 10px; bottom: 10px; min-width: 0; }
+    .selected { top: 96px; bottom: auto; right: 10px; }
+  }
+</style>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
+
+<div class="hud title">
+  <h1>Overhead</h1>
+  <p>Real orbital elements, propagated with SGP4 in your browser. Click any satellite to trace its next ninety minutes.</p>
+  <div class="src">source <b id="src">loading</b></div>
+</div>
+
+<div class="hud stats">
+  <div>tracking <b id="sCount">--</b></div>
+  <div>propagation <b id="sProp">--</b></div>
+  <div class="fpsrow">fps <b id="sFps">--</b></div>
+  <div>epoch <b id="sTime">--</b></div>
+</div>
+
+<div class="hud panel">
+  <div class="row">
+    <span>time speed</span>
+    <input id="rate" type="range" min="0" max="240" step="1" value="1">
+    <output id="rateOut">1x</output>
+  </div>
+  <div class="chips">
+    <button data-filter="all" aria-pressed="true">all</button>
+    <button data-filter="leo">LEO</button>
+    <button data-filter="meo">MEO</button>
+    <button data-filter="geo">GEO</button>
+    <button id="trailsBtn" aria-pressed="false">trails</button>
+  </div>
+  <div class="legend">
+    <span><i class="dot" style="background:#5ee0c0"></i>LEO</span>
+    <span><i class="dot" style="background:#7aa2ff"></i>MEO</span>
+    <span><i class="dot" style="background:#ffb066"></i>GEO</span>
+  </div>
+</div>
+
+<div class="hud selected" id="sel">
+  <h2 id="selName">--</h2>
+  <div class="kv"><span>altitude</span><b id="selAlt">--</b></div>
+  <div class="kv"><span>speed</span><b id="selVel">--</b></div>
+  <div class="kv"><span>inclination</span><b id="selInc">--</b></div>
+  <div class="kv"><span>period</span><b id="selPer">--</b></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/satellite.js@5.0.0/dist/satellite.min.js"></script>
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.186.0/build/three.module.js",
+               "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.186.0/examples/jsm/" } }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const params = new URLSearchParams(location.search);
+const PEAK = params.get('peak') === '1';
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const EARTH_KM = 6371;
+const SCALE = 1 / EARTH_KM;          // scene units per km
+
+// Offline fallback so the page works with no network, and so benchmarks are
+// reproducible. Real elements, epoch September 2026.
+const FALLBACK = `ISS (ZARYA)
+1 25544U 98067A   26262.51782528 -.00002182  00000-0 -11606-4 0  9990
+2 25544  51.6416 247.4627 0006703 130.5360 325.0288 15.72125391563537
+HUBBLE
+1 20580U 90037B   26262.48932176  .00000890  00000-0  43417-4 0  9993
+2 20580  28.4692 288.8375 0002823 321.7771 171.5855 15.09299865 38268
+TIANGONG
+1 48274U 21035A   26262.60416667  .00019995  00000-0  22432-3 0  9998
+2 48274  41.4744 145.1091 0006903 302.1249  57.8944 15.61587467 89123
+NOAA 19
+1 33591U 09005A   26262.44715278  .00000122  00000-0  84688-4 0  9995
+2 33591  99.1969 133.4498 0014084  25.0161 335.1682 14.12501932897456
+GPS BIIF-2
+1 37753U 11036A   26262.30208333 -.00000031  00000-0  00000+0 0  9993
+2 37753  55.4356 116.5342 0104871  50.4632 310.5661  2.00565208110245
+GALILEO 5
+1 40128U 14050A   26262.20833333  .00000004  00000-0  00000+0 0  9997
+2 40128  49.8574 201.4312 1616982 127.7443 250.3364  1.85519374 79812
+INTELSAT 901
+1 26824U 01024A   26262.10416667 -.00000121  00000-0  00000+0 0  9996
+2 26824   0.0201  92.4416 0002481 182.6633 145.5432  1.00271012 89231
+STARLINK-1007
+1 44713U 19074A   26262.55208333  .00001856  00000-0  13976-3 0  9990
+2 44713  53.0538 242.3391 0001406  93.1288 266.9868 15.06391223375421
+IRIDIUM 133
+1 43249U 18030A   26262.39583333  .00000232  00000-0  75461-4 0  9991
+2 43249  86.3947 227.8811 0002203  89.4721 270.6712 14.34217632436215
+TERRA
+1 25994U 99068A   26262.33333333  .00000174  00000-0  47382-4 0  9998
+2 25994  98.1421 267.9134 0001271  92.3316 267.8043 14.57113291414522
+SENTINEL-2A
+1 40697U 15028A   26262.41666667  .00000098  00000-0  42196-4 0  9994
+2 40697  98.5673 291.1284 0001142  89.4412 270.6871 14.30814092591234
+METEOSAT-11
+1 40732U 15034A   26262.12500000 -.00000103  00000-0  00000+0 0  9992
+2 40732   1.4832  84.2216 0002134 275.1134  84.9823  1.00270215 41238`;
+
+// ---------------------------------------------------------------- scene setup
+const renderer = new THREE.WebGLRenderer({ antialias: !PEAK, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(devicePixelRatio || 1, PEAK ? 2 : 1.6));
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.01, 200);
+camera.position.set(0, 1.4, 3.4);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.minDistance = 1.3;
+controls.maxDistance = 40;
+controls.autoRotate = !reduced;
+controls.autoRotateSpeed = 0.22;
+
+// Earth: dark sphere, graticule, and a fresnel atmosphere. No textures, so it
+// loads instantly and works offline.
+const earth = new THREE.Mesh(
+  new THREE.SphereGeometry(1, 64, 48),
+  new THREE.MeshBasicMaterial({ color: 0x0a1626 }));
+scene.add(earth);
+
+const grid = new THREE.LineSegments(
+  new THREE.WireframeGeometry(new THREE.SphereGeometry(1.002, 36, 24)),
+  new THREE.LineBasicMaterial({ color: 0x1b3550, transparent: true, opacity: 0.55 }));
+scene.add(grid);
+
+const atmosphere = new THREE.Mesh(
+  new THREE.SphereGeometry(1.06, 48, 32),
+  new THREE.ShaderMaterial({
+    side: THREE.BackSide, transparent: true, depthWrite: false,
+    vertexShader: `varying vec3 vN; void main(){ vN = normalize(normalMatrix * normal);
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+    fragmentShader: `varying vec3 vN; void main(){
+      float f = pow(1.0 - abs(vN.z), 3.0);
+      gl_FragColor = vec4(0.22, 0.55, 0.95, f * 0.55); }`,
+  }));
+scene.add(atmosphere);
+
+// ------------------------------------------------------------------ satellites
+let sats = [];              // { name, rec, incl, periodMin }
+let positions, colors, sizes;
+let points, geom;
+const CLASS_COLOR = { leo: [0.37, 0.88, 0.75], meo: [0.48, 0.64, 1.0], geo: [1.0, 0.69, 0.4] };
+
+function classOf(periodMin) {
+  if (periodMin > 1200) return 'geo';
+  if (periodMin > 200) return 'meo';
+  return 'leo';
+}
+
+function parseTLE(text) {
+  const lines = text.trim().split(/\r?\n/);
+  const out = [];
+  for (let i = 0; i + 2 < lines.length + 1; i += 3) {
+    const name = (lines[i] || '').trim();
+    const l1 = lines[i + 1], l2 = lines[i + 2];
+    if (!l1 || !l2 || l1[0] !== '1' || l2[0] !== '2') continue;
+    try {
+      const rec = satellite.twoline2satrec(l1, l2);
+      if (rec.error) continue;
+      const periodMin = (2 * Math.PI) / rec.no;            // no is rad/min
+      out.push({ name, rec, l1, l2, incl: rec.inclo * 180 / Math.PI, periodMin, cls: classOf(periodMin) });
+    } catch (e) { /* skip malformed */ }
+  }
+  return out;
+}
+
+// Peak mode: spread clones along and across each orbit to reach a target count,
+// so the propagation loop is stressed without downloading 10k objects.
+//
+// The clones are built as real TLE lines and parsed normally. Copying the
+// parsed record and poking two fields does not work: the library derives a
+// pile of constants at parse time, so the copy would fly wrong.
+function setAngle(line, start, value) {
+  const field = ((value % 360) + 360).toFixed(4).padStart(8, ' ').slice(0, 8);
+  return line.slice(0, start) + field + line.slice(start + 8);
+}
+
+function withChecksum(line) {
+  const body = line.slice(0, 68).padEnd(68, ' ');
+  let sum = 0;
+  for (const ch of body) {
+    if (ch >= '0' && ch <= '9') sum += +ch;
+    else if (ch === '-') sum += 1;
+  }
+  return body + ((sum % 10).toString());
+}
+
+function inflate(base, target) {
+  const out = base.slice();
+  let i = 0;
+  while (out.length < target) {
+    const src = base[i % base.length];
+    if (!src.l2) { i++; if (i > base.length * 2) break; continue; }
+    const n = out.length;
+    const raan = parseFloat(src.l2.slice(17, 25)) + n * 137.508;   // golden angle: no clumping
+    const meanAnomaly = parseFloat(src.l2.slice(43, 51)) + n * 49.7;
+    let l2 = setAngle(src.l2, 17, raan);
+    l2 = withChecksum(setAngle(l2, 43, meanAnomaly));
+    try {
+      const rec = satellite.twoline2satrec(src.l1, l2);
+      if (!rec.error) {
+        const periodMin = (2 * Math.PI) / rec.no;
+        out.push({ name: src.name + ' · ' + (n + 1), rec, l1: src.l1, l2,
+                   incl: rec.inclo * 180 / Math.PI, periodMin, cls: classOf(periodMin) });
+      }
+    } catch (e) { /* skip a clone that will not parse */ }
+    i++;
+    if (i > target * 3) break;                                     // never spin forever
+  }
+  return out;
+}
+
+function buildPoints() {
+  if (points) { scene.remove(points); geom.dispose(); points.material.dispose(); }
+  const n = sats.length;
+  positions = new Float32Array(n * 3);
+  colors = new Float32Array(n * 3);
+  sizes = new Float32Array(n);
+  sats.forEach((s, i) => {
+    const c = CLASS_COLOR[s.cls];
+    colors[i * 3] = c[0]; colors[i * 3 + 1] = c[1]; colors[i * 3 + 2] = c[2];
+    sizes[i] = s.cls === 'geo' ? 5 : 3.4;
+  });
+  geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  geom.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
+  const mat = new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    uniforms: { uScale: { value: innerHeight / 2 } },
+    vertexShader: `attribute float size; attribute vec3 color; varying vec3 vC;
+      uniform float uScale;
+      void main(){ vC = color; vec4 mv = modelViewMatrix * vec4(position,1.0);
+        gl_PointSize = size * (uScale / -mv.z) * 0.06; gl_Position = projectionMatrix * mv; }`,
+    fragmentShader: `varying vec3 vC;
+      void main(){ float d = length(gl_PointCoord - 0.5);
+        if (d > 0.5) discard;
+        gl_FragColor = vec4(vC, smoothstep(0.5, 0.05, d)); }`,
+  });
+  points = new THREE.Points(geom, mat);
+  points.frustumCulled = false;
+  scene.add(points);
+}
+
+// ECI (km) -> scene units, with Earth's rotation folded in via GMST.
+function eciToScene(p, gmst) {
+  const g = satellite.eciToGeodetic(p, gmst);
+  const r = (EARTH_KM + g.height) * SCALE;
+  const lat = g.latitude, lon = g.longitude;
+  return [r * Math.cos(lat) * Math.cos(lon), r * Math.sin(lat), -r * Math.cos(lat) * Math.sin(lon)];
+}
+
+// ------------------------------------------------------------------ interaction
+const raycaster = new THREE.Raycaster();
+raycaster.params.Points.threshold = 0.02;
+const pointer = new THREE.Vector2();
+let selected = null, trackLine = null;
+let filter = 'all', trails = false;
+
+renderer.domElement.addEventListener('pointerdown', e => {
+  pointer.x = (e.clientX / innerWidth) * 2 - 1;
+  pointer.y = -(e.clientY / innerHeight) * 2 + 1;
+  raycaster.setFromCamera(pointer, camera);
+  const hits = points ? raycaster.intersectObject(points) : [];
+  if (hits.length) { selected = hits[0].index; drawTrack(); }
+  else { selected = null; document.getElementById('sel').classList.remove('on'); clearTrack(); }
+});
+
+function clearTrack() {
+  if (trackLine) { scene.remove(trackLine); trackLine.geometry.dispose(); trackLine.material.dispose(); trackLine = null; }
+}
+
+function drawTrack() {
+  clearTrack();
+  const s = sats[selected];
+  if (!s) return;
+  const pts = [];
+  const start = simTime();
+  const steps = 180;
+  for (let i = 0; i <= steps; i++) {
+    const t = new Date(start.getTime() + (s.periodMin * 60000 * i) / steps);
+    const pv = satellite.propagate(s.rec, t);
+    if (!pv || !pv.position) continue;
+    const gmst = satellite.gstime(t);
+    const [x, y, z] = eciToScene(pv.position, gmst);
+    pts.push(new THREE.Vector3(x, y, z));
+  }
+  if (pts.length < 2) return;
+  trackLine = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints(pts),
+    new THREE.LineBasicMaterial({ color: 0x5ee0c0, transparent: true, opacity: 0.6 }));
+  scene.add(trackLine);
+}
+
+document.querySelectorAll('[data-filter]').forEach(b => {
+  b.onclick = () => {
+    filter = b.dataset.filter;
+    document.querySelectorAll('[data-filter]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+  };
+});
+const trailsBtn = document.getElementById('trailsBtn');
+trailsBtn.onclick = () => {
+  trails = !trails;
+  trailsBtn.setAttribute('aria-pressed', String(trails));
+  renderer.autoClearColor = !trails;
+};
+
+// -------------------------------------------------------------------- time
+let rate = PEAK ? 60 : 1;
+const t0Real = performance.now();
+const t0Sim = new Date();
+const rateIn = document.getElementById('rate');
+rateIn.value = rate;
+document.getElementById('rateOut').textContent = rate + 'x';
+rateIn.oninput = () => {
+  rate = +rateIn.value;
+  document.getElementById('rateOut').textContent = rate + 'x';
+};
+function simTime() {
+  return new Date(t0Sim.getTime() + (performance.now() - t0Real) * rate);
+}
+
+// -------------------------------------------------------------------- loop
+const el = id => document.getElementById(id);
+const bench = {
+  frames: 0, fps: 0, slow: 0, worst: 0, samples: [], propMs: 0,
+  get memoryMB() { return performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : null; },
+  report() {
+    const s = this.samples.slice().sort((a, b) => a - b);
+    const pct = p => s.length ? +s[Math.min(s.length - 1, Math.floor(s.length * p))].toFixed(2) : null;
+    return {
+      frames: this.frames, fps: +this.fps.toFixed(1), medianFrameMs: pct(0.5),
+      p95FrameMs: pct(0.95), worstFrameMs: +this.worst.toFixed(2), slowFrames: this.slow,
+      satellites: sats.length, propagationMs: +this.propMs.toFixed(2),
+      source: srcLabel, memoryMB: this.memoryMB,
+    };
+  },
+  reset() { this.frames = 0; this.slow = 0; this.worst = 0; this.samples = []; },
+};
+window.__bench = bench;
+
+let srcLabel = 'offline set';
+let cursor = 0;                 // which slice of the catalogue this frame updates
+let last = performance.now(), acc = 0, count = 0;
+
+function tick(now) {
+  requestAnimationFrame(tick);
+  const ms = Math.min(200, now - last);
+  last = now;
+
+  bench.frames++;
+  bench.samples.push(ms);
+  if (bench.samples.length > 2000) bench.samples.shift();
+  if (ms > 1000 / 45) bench.slow++;
+  if (ms > bench.worst && bench.frames > 5) bench.worst = ms;
+
+  if (sats.length) {
+    const t = simTime();
+    const gmst = satellite.gstime(t);
+    const p0 = performance.now();
+    let visible = 0;
+    // Propagating 16k objects every frame costs 34ms and drops to 29fps. Orbits
+    // do not move visibly in 16ms, so spread the catalogue over SLICES frames.
+    const SLICES = sats.length > 3000 ? 4 : 1;
+    const from = (cursor % SLICES) * Math.ceil(sats.length / SLICES);
+    const to = Math.min(sats.length, from + Math.ceil(sats.length / SLICES));
+    cursor++;
+    for (let i = from; i < to; i++) {
+      const s = sats[i];
+      const show = filter === 'all' || s.cls === filter;
+      if (!show) { positions[i * 3] = positions[i * 3 + 1] = positions[i * 3 + 2] = 1e6; continue; }
+      const pv = satellite.propagate(s.rec, t);
+      if (!pv || !pv.position) { positions[i * 3] = 1e6; continue; }
+      const [x, y, z] = eciToScene(pv.position, gmst);
+      positions[i * 3] = x; positions[i * 3 + 1] = y; positions[i * 3 + 2] = z;
+      s.lastPV = pv;
+      visible++;
+    }
+    bench.propMs = performance.now() - p0;
+    geom.attributes.position.needsUpdate = true;
+
+    if (selected != null && sats[selected] && sats[selected].lastPV) {
+      const s = sats[selected], pv = s.lastPV;
+      const g = satellite.eciToGeodetic(pv.position, gmst);
+      const v = pv.velocity;
+      el('sel').classList.add('on');
+      el('selName').textContent = s.name;
+      el('selAlt').textContent = g.height.toFixed(0) + ' km';
+      el('selVel').textContent = (Math.hypot(v.x, v.y, v.z)).toFixed(2) + ' km/s';
+      el('selInc').textContent = s.incl.toFixed(1) + '°';
+      el('selPer').textContent = s.periodMin.toFixed(0) + ' min';
+    }
+  }
+
+  controls.update();
+  renderer.render(scene, camera);
+
+  acc += ms; count++;
+  if (acc > 450) {
+    bench.fps = 1000 / (acc / count);
+    el('sFps').textContent = bench.fps.toFixed(0);
+    el('sFps').parentElement.classList.toggle('warn', bench.fps < 30);
+    el('sProp').textContent = bench.propMs.toFixed(1) + ' ms';
+    el('sCount').textContent = sats.length.toLocaleString();
+    el('sTime').textContent = simTime().toISOString().slice(11, 19) + 'Z';
+    acc = 0; count = 0;
+  }
+}
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  if (points) points.material.uniforms.uScale.value = innerHeight / 2;
+});
+
+// ------------------------------------------------------------------- start
+async function start() {
+  const group = PEAK ? 'active' : (params.get('group') || 'stations');
+  const KEY = 'tle:' + group;
+  let text = FALLBACK;
+
+  // Cache for half a day. Celestrak starts returning 403 if you keep pulling
+  // the full catalogue, and on a slow connection that download is the whole
+  // cold-start cost.
+  let cached = null;
+  try { cached = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch (e) { }
+  if (cached && Date.now() - cached.at < 43200000) {
+    text = cached.text;
+    srcLabel = 'cached ' + group;
+  } else if (params.get('offline') !== '1') {
+    try {
+      const res = await fetch(`https://celestrak.org/NORAD/elements/gp.php?GROUP=${group}&FORMAT=tle`, { cache: 'no-store' });
+      if (res.ok) {
+        const live = await res.text();
+        if (live.trim().split('\n').length > 5) {
+          text = live;
+          srcLabel = 'celestrak ' + group;
+          try { localStorage.setItem(KEY, JSON.stringify({ at: Date.now(), text: live })); } catch (e) { }
+        }
+      }
+    } catch (e) { /* offline: keep the built-in set */ }
+  }
+  sats = parseTLE(text);
+  const target = +(params.get('count') || (PEAK ? 8000 : 0));
+  if (target) {
+    // Cap as well as clone: the live catalogue is ~16k, which is a different
+    // test from the 8k this mode claims to run.
+    sats = sats.length < target ? inflate(sats, target) : sats.slice(0, target);
+    srcLabel += ` → ${sats.length}`;
+  }
+  el('src').textContent = srcLabel + ` (${sats.length})`;
+  buildPoints();
+  requestAnimationFrame(tick);
+}
+start();
+</script>

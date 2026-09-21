@@ -1,0 +1,347 @@
+<meta charset="utf-8">
+<title>Onefile</title>
+<link rel="icon" href="data:,">
+<meta name="description" content="A whole presentation in one HTML file. Edit in place, save a copy of itself, present offline.">
+<style>
+  :root {
+    --bg: #0b0d12; --fg: #f2f4f8; --dim: #9aa2b5; --line: #1e2331; --accent: #ffb454;
+    --slide: #10131b;
+    font-family: Geist, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #f4f5f7; --fg: #12141a; --dim: #5d6478; --line: #dfe2ea; --slide: #ffffff; }
+  }
+  :root[data-theme="light"] { --bg: #f4f5f7; --fg: #12141a; --dim: #5d6478; --line: #dfe2ea; --slide: #ffffff; }
+  :root[data-theme="dark"] { --bg: #0b0d12; --fg: #f2f4f8; --dim: #9aa2b5; --line: #1e2331; --slide: #10131b; }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); overflow: hidden; height: 100vh; }
+
+  #stage { position: fixed; inset: 0; display: grid; place-items: center; }
+  .slide {
+    position: absolute; width: min(92vw, calc(88vh * 16 / 9)); aspect-ratio: 16 / 9;
+    background: var(--slide); border: 1px solid var(--line); border-radius: 14px;
+    padding: 6% 7%; display: grid; align-content: center; gap: 2.2vh;
+    box-shadow: 0 24px 80px rgba(0, 0, 0, .35);
+    opacity: 0; transform: translateY(18px) scale(.985); pointer-events: none;
+    transition: opacity .32s ease, transform .32s ease;
+  }
+  .slide.on { opacity: 1; transform: none; pointer-events: auto; }
+  .slide.prev { transform: translateY(-14px) scale(.985); }
+  @media (prefers-reduced-motion: reduce) { .slide { transition: none; } }
+
+  .slide h1 { margin: 0; font-size: clamp(26px, 5.4vh, 64px); line-height: 1.05; letter-spacing: -.02em; }
+  .slide h2 { margin: 0; font-size: clamp(20px, 3.6vh, 38px); line-height: 1.15; letter-spacing: -.01em; }
+  .slide p, .slide li { margin: 0; font-size: clamp(14px, 2.3vh, 24px); line-height: 1.5; color: var(--dim); }
+  .slide ul { margin: 0; padding-left: 1.1em; display: grid; gap: 1.1vh; }
+  .slide .kicker { font-size: clamp(11px, 1.7vh, 15px); letter-spacing: .2em; text-transform: uppercase; color: var(--accent); }
+  .slide .big { font-size: clamp(40px, 12vh, 140px); font-weight: 600; letter-spacing: -.04em; line-height: 1; }
+  .slide .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 3%; }
+  .slide[data-layout="center"] { text-align: center; justify-items: center; }
+  .slide [contenteditable]:focus { outline: 2px solid var(--accent); outline-offset: 6px; border-radius: 4px; }
+
+  #bar {
+    position: fixed; left: 0; right: 0; bottom: 0; height: 3px; background: transparent; z-index: 5;
+  }
+  #bar i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .3s ease; }
+
+  #chrome {
+    position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 6px; align-items: center; z-index: 6;
+    background: color-mix(in srgb, var(--bg) 82%, transparent);
+    border: 1px solid var(--line); border-radius: 999px; padding: 6px 8px; backdrop-filter: blur(10px);
+    opacity: .25; transition: opacity .2s;
+  }
+  #chrome:hover, #chrome:focus-within { opacity: 1; }
+  button {
+    font: inherit; font-size: 12px; color: var(--fg); background: transparent; cursor: pointer;
+    border: 1px solid transparent; border-radius: 999px; padding: 5px 11px;
+  }
+  button:hover { border-color: var(--line); }
+  button[aria-pressed=true] { border-color: var(--accent); color: var(--accent); }
+  #count { color: var(--dim); font-size: 12px; font-family: "Geist Mono", ui-monospace, monospace; padding: 0 6px; white-space: nowrap; }
+
+  #notes {
+    position: fixed; right: 18px; bottom: 60px; width: 280px; max-height: 40vh; overflow: auto;
+    background: var(--slide); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px;
+    font-size: 13px; color: var(--dim); line-height: 1.5; display: none; z-index: 6;
+  }
+  #notes.on { display: block; }
+  #notes h3 { margin: 0 0 6px; font-size: 11px; letter-spacing: .18em; text-transform: uppercase; color: var(--fg); }
+
+  #grid {
+    position: fixed; inset: 0; background: var(--bg); z-index: 7; padding: 26px; overflow: auto;
+    display: none; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 14px; align-content: start;
+  }
+  #grid.on { display: grid; }
+  .thumb {
+    aspect-ratio: 16 / 9; background: var(--slide); border: 1px solid var(--line); border-radius: 8px;
+    padding: 12px; font-size: 9px; color: var(--dim); cursor: pointer; overflow: hidden; position: relative;
+  }
+  .thumb:hover { border-color: var(--accent); }
+  .thumb b { display: block; color: var(--fg); font-size: 12px; margin-bottom: 5px; }
+  .thumb i { position: absolute; right: 8px; bottom: 6px; font-style: normal; font-family: "Geist Mono", monospace; }
+
+  @media print {
+    #chrome, #bar, #notes, #grid { display: none !important; }
+    body { overflow: visible; height: auto; background: #fff; }
+    #stage { position: static; display: block; }
+    .slide {
+      position: static; opacity: 1 !important; transform: none !important; page-break-after: always;
+      width: 100%; box-shadow: none; border: 0; margin: 0 0 8mm;
+    }
+  }
+</style>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
+
+<div id="stage">
+  <section class="slide" data-layout="center" data-notes="Open cold. Say the promise in one line, then stop talking.">
+    <div class="kicker">Onefile</div>
+    <h1 contenteditable>A deck that is one file</h1>
+    <p contenteditable>No app, no account, no export step. Open it, present it, send it.</p>
+  </section>
+
+  <section class="slide" data-notes="The pain everyone recognises: decks trapped in an app or a login.">
+    <div class="kicker">The problem</div>
+    <h2 contenteditable>Slides are hostages</h2>
+    <ul>
+      <li contenteditable>Locked inside an app, a login, or a paid seat</li>
+      <li contenteditable>Broken fonts the moment it leaves your machine</li>
+      <li contenteditable>No internet, no presentation</li>
+    </ul>
+  </section>
+
+  <section class="slide" data-layout="center" data-notes="The number that makes it concrete.">
+    <div class="kicker">Size of this deck</div>
+    <div class="big" id="sizeNum">—</div>
+    <p contenteditable>One HTML file. That is the whole product.</p>
+  </section>
+
+  <section class="slide" data-notes="Explain the save trick: the file rewrites itself with your edits.">
+    <div class="kicker">How it works</div>
+    <h2 contenteditable>It saves a copy of itself</h2>
+    <div class="cols">
+      <div>
+        <p contenteditable><b>Edit</b> anything on a slide, in place.</p>
+        <p contenteditable><b>Save</b> writes a new HTML file containing your text.</p>
+      </div>
+      <div>
+        <p contenteditable><b>Present</b> works offline, on any device with a browser.</p>
+        <p contenteditable><b>Print</b> gives you a PDF, one slide per page.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide" data-layout="center" data-notes="Close with the ask.">
+    <div class="kicker">Yours</div>
+    <h1 contenteditable>Steal this deck</h1>
+    <p contenteditable>Press E to edit, S to save your copy.</p>
+  </section>
+</div>
+
+<div id="bar"><i></i></div>
+
+<div id="chrome">
+  <button id="prev" title="Previous (←)">←</button>
+  <span id="count">1 / 5</span>
+  <button id="next" title="Next (→)">→</button>
+  <button id="gridBtn" title="Overview (G)">grid</button>
+  <button id="editBtn" title="Edit (E)" aria-pressed="false">edit</button>
+  <button id="notesBtn" title="Notes (N)" aria-pressed="false">notes</button>
+  <button id="themeBtn" title="Theme (T)">theme</button>
+  <button id="saveBtn" title="Save a copy (S)">save</button>
+  <button id="pdfBtn" title="Print to PDF (P)">pdf</button>
+</div>
+
+<div id="notes"><h3>Presenter notes</h3><div id="notesBody"></div></div>
+<div id="grid"></div>
+
+<script>
+(() => {
+  'use strict';
+  const params = new URLSearchParams(location.search);
+  const PEAK = params.get('peak') === '1';
+  const stage = document.getElementById('stage');
+  const el = id => document.getElementById(id);
+
+  // Peak: clone the deck up to N slides to test navigation and layout cost.
+  if (PEAK) {
+    const target = +(params.get('slides') || 200);
+    const originals = [...stage.children];
+    while (stage.children.length < target) {
+      const clone = originals[stage.children.length % originals.length].cloneNode(true);
+      clone.querySelectorAll('[contenteditable]').forEach(n => {
+        n.textContent = n.textContent + ' ' + stage.children.length;
+      });
+      stage.appendChild(clone);
+    }
+  }
+
+  const slides = [...stage.querySelectorAll('.slide')];
+  let index = 0, editing = false;
+
+  function show(i, instant) {
+    index = Math.max(0, Math.min(slides.length - 1, i));
+    slides.forEach((s, n) => {
+      s.classList.toggle('on', n === index);
+      s.classList.toggle('prev', n < index);
+      if (instant) s.style.transition = 'none';
+    });
+    if (instant) requestAnimationFrame(() => slides.forEach(s => (s.style.transition = '')));
+    el('count').textContent = (index + 1) + ' / ' + slides.length;
+    el('bar').firstElementChild.style.width = ((index + 1) / slides.length * 100) + '%';
+    el('notesBody').textContent = slides[index].dataset.notes || 'No notes for this slide.';
+    // replaceState, not location.hash: flipping 200 slides should not write 200 history entries
+    history.replaceState(null, '', '#' + (index + 1));
+  }
+
+  // ------------------------------------------------------------------ input
+  addEventListener('keydown', e => {
+    if (e.target.isContentEditable && !['Escape'].includes(e.key)) return;
+    const k = e.key.toLowerCase();
+    if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') { e.preventDefault(); show(index + 1); }
+    else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); show(index - 1); }
+    else if (e.key === 'Home') show(0);
+    else if (e.key === 'End') show(slides.length - 1);
+    else if (k === 'g') toggleGrid();
+    else if (k === 'e') toggleEdit();
+    else if (k === 'n') toggleNotes();
+    else if (k === 't') cycleTheme();
+    else if (k === 's') { e.preventDefault(); save(); }
+    else if (k === 'p') print();
+    else if (e.key === 'Escape') { el('grid').classList.remove('on'); }
+  });
+
+  let touchX = null;
+  addEventListener('touchstart', e => (touchX = e.touches[0].clientX), { passive: true });
+  addEventListener('touchend', e => {
+    if (touchX == null) return;
+    const dx = e.changedTouches[0].clientX - touchX;
+    if (Math.abs(dx) > 60) show(index + (dx < 0 ? 1 : -1));
+    touchX = null;
+  }, { passive: true });
+
+  el('next').onclick = () => show(index + 1);
+  el('prev').onclick = () => show(index - 1);
+  el('gridBtn').onclick = toggleGrid;
+  el('editBtn').onclick = toggleEdit;
+  el('notesBtn').onclick = toggleNotes;
+  el('themeBtn').onclick = cycleTheme;
+  el('saveBtn').onclick = save;
+  el('pdfBtn').onclick = () => print();
+
+  function toggleEdit() {
+    editing = !editing;
+    el('editBtn').setAttribute('aria-pressed', String(editing));
+    document.documentElement.style.cursor = editing ? 'text' : '';
+    slides.forEach(s => s.querySelectorAll('[contenteditable]').forEach(n => {
+      n.setAttribute('contenteditable', String(editing));
+    }));
+  }
+  // Editing is off until asked for, so a stray click never rewrites a slide.
+  slides.forEach(s => s.querySelectorAll('[contenteditable]').forEach(n => n.setAttribute('contenteditable', 'false')));
+
+  function toggleNotes() {
+    const on = el('notes').classList.toggle('on');
+    el('notesBtn').setAttribute('aria-pressed', String(on));
+  }
+
+  function cycleTheme() {
+    const cur = document.documentElement.dataset.theme;
+    document.documentElement.dataset.theme = cur === 'dark' ? 'light' : cur === 'light' ? '' : 'dark';
+  }
+
+  function toggleGrid() {
+    const g = el('grid');
+    if (g.classList.contains('on')) { g.classList.remove('on'); return; }
+    g.innerHTML = '';
+    slides.forEach((s, i) => {
+      const t = document.createElement('div');
+      t.className = 'thumb';
+      // A slide with no heading (the big-number one) falls back to its kicker label.
+      const head = s.querySelector('h1, h2') || s.querySelector('.kicker');
+      t.innerHTML = `<b>${head ? head.textContent.slice(0, 48) : 'Slide'}</b>`
+        + `${(s.querySelector('p, li')?.textContent || '').slice(0, 90)}<i>${i + 1}</i>`;
+      t.onclick = () => { show(i, true); g.classList.remove('on'); };
+      g.appendChild(t);
+    });
+    g.classList.add('on');
+  }
+
+  // ------------------------------------------------------- save a copy of itself
+  function save() {
+    // Snapshot the live DOM back into the source, so edits travel with the file.
+    const doc = document.documentElement.cloneNode(true);
+    doc.querySelectorAll('#grid').forEach(n => (n.innerHTML = ''));
+    doc.querySelectorAll('.slide').forEach(n => n.classList.remove('on', 'prev'));
+    doc.querySelectorAll('[contenteditable]').forEach(n => n.setAttribute('contenteditable', 'false'));
+    const html = '<!doctype html>\n<html>' + doc.innerHTML + '</html>';
+    const blob = new Blob([html], { type: 'text/html' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    const title = (slides[0].querySelector('h1')?.textContent || 'deck').trim()
+      .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    a.download = (title || 'deck') + '.html';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    return blob.size;
+  }
+
+  // Show the file's own size, because that is the pitch.
+  fetch(location.pathname).then(r => r.blob()).then(b => {
+    const kb = b.size / 1024;
+    const n = el('sizeNum');
+    if (n) n.textContent = kb < 1024 ? kb.toFixed(0) + ' KB' : (kb / 1024).toFixed(1) + ' MB';
+  }).catch(() => {});
+
+  // ----------------------------------------------------------------- bench
+  const bench = {
+    frames: 0, fps: 0, slow: 0, worst: 0, samples: [], navMs: [],
+    get memoryMB() { return performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : null; },
+    report() {
+      const s = this.samples.slice().sort((a, b) => a - b);
+      const pct = p => s.length ? +s[Math.min(s.length - 1, Math.floor(s.length * p))].toFixed(2) : null;
+      const nav = this.navMs.slice().sort((a, b) => a - b);
+      return {
+        frames: this.frames, fps: +this.fps.toFixed(1), medianFrameMs: pct(0.5),
+        p95FrameMs: pct(0.95), worstFrameMs: +this.worst.toFixed(2), slowFrames: this.slow,
+        slides: slides.length, domNodes: document.querySelectorAll('*').length,
+        medianNavMs: nav.length ? +nav[Math.floor(nav.length / 2)].toFixed(2) : null,
+        worstNavMs: nav.length ? +nav[nav.length - 1].toFixed(2) : null,
+        memoryMB: this.memoryMB,
+      };
+    },
+    reset() { this.frames = 0; this.slow = 0; this.worst = 0; this.samples = []; this.navMs = []; },
+    // Used by the benchmark: flip through every slide and time each transition.
+    async run(times) {
+      for (let i = 0; i < (times || slides.length); i++) {
+        const t = performance.now();
+        show((index + 1) % slides.length);
+        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+        this.navMs.push(performance.now() - t);
+      }
+      return this.report();
+    },
+    toggleGrid, save, show,
+  };
+  window.__bench = bench;
+
+  let last = performance.now(), acc = 0, count = 0;
+  (function frame(now) {
+    requestAnimationFrame(frame);
+    const ms = Math.min(200, now - last);
+    last = now;
+    bench.frames++;
+    bench.samples.push(ms);
+    if (bench.samples.length > 2000) bench.samples.shift();
+    if (ms > 1000 / 45) bench.slow++;
+    if (ms > bench.worst && bench.frames > 5) bench.worst = ms;
+    acc += ms; count++;
+    if (acc > 500) { bench.fps = 1000 / (acc / count); acc = 0; count = 0; }
+  })(performance.now());
+
+  const start = Math.max(0, (parseInt(location.hash.slice(1), 10) || 1) - 1);
+  show(start, true);
+})();
+</script>

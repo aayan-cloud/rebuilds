@@ -1,0 +1,54 @@
+[
+  {
+    "slug": "blackhole",
+    "name": "Event Horizon",
+    "rebuildOf": "HN 477pts: physically accurate black hole",
+    "interact": "() => { const c = document.querySelector('canvas'); let x = 400; const id = setInterval(() => { x += 7; c.dispatchEvent(new PointerEvent('pointermove', {clientX: x, clientY: 300, bubbles: true})); }, 16); setTimeout(() => clearInterval(id), 8000); }"
+  },
+  {
+    "slug": "elevators",
+    "name": "Lift Logic",
+    "rebuildOf": "HN 1680pts: Elevators",
+    "interact": "() => { const algos = ['nearest','scan','fcfs','zoned']; let i = 0; const id = setInterval(() => window.__bench.setAlgo(algos[i++ % 4]), 4000); setTimeout(() => clearInterval(id), 16000); }"
+  },
+  {
+    "slug": "lightspeed",
+    "name": "Slow Light",
+    "rebuildOf": "HN 630pts: what if the speed of light was 5 km/h"
+  },
+  {
+    "slug": "satellites",
+    "name": "Overhead",
+    "rebuildOf": "GitHub 38k: gods-eye-view satellite globe"
+  },
+  {
+    "slug": "sysdeck",
+    "name": "Sysdeck",
+    "rebuildOf": "GitHub 45k archived: eDEX-UI"
+  },
+  {
+    "slug": "deck",
+    "name": "Onefile",
+    "rebuildOf": "HN 1033pts: Bento, a deck in one HTML file"
+  },
+  {
+    "slug": "recorder",
+    "name": "Cleanshot",
+    "rebuildOf": "GitHub 40k archived: openscreen"
+  },
+  {
+    "slug": "dashboard",
+    "name": "Machine",
+    "rebuildOf": "GitHub 10k stale: linux-dash"
+  },
+  {
+    "slug": "drop",
+    "name": "Toss",
+    "rebuildOf": "Snapdrop"
+  },
+  {
+    "slug": "agent",
+    "name": "Localmind",
+    "rebuildOf": "GitHub 36k archived: AgentGPT"
+  }
+]

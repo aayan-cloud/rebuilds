@@ -1,0 +1,406 @@
+<meta charset="utf-8">
+<title>Cleanshot</title>
+<link rel="icon" href="data:,">
+<meta name="description" content="Screen recording with automatic zoom and a soft backdrop. No install, no watermark.">
+<style>
+  :root {
+    --bg: #0a0c11; --fg: #eef0f5; --dim: #9098ac; --line: #1d2230; --accent: #7dd3a0; --rec: #ff5f56;
+    font-family: Geist, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); height: 100vh; display: grid; grid-template-rows: auto 1fr auto; }
+
+  header { padding: 16px 22px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); }
+  header h1 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: .18em; text-transform: uppercase; }
+  header p { margin: 4px 0 0; font-size: 12px; color: var(--dim); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); display: inline-block; margin-right: 7px; }
+  .dot.live { background: var(--rec); animation: pulse 1.4s infinite; }
+  @keyframes pulse { 50% { opacity: .35; } }
+  @media (prefers-reduced-motion: reduce) { .dot.live { animation: none; } }
+
+  main { display: grid; place-items: center; padding: 18px; min-height: 0; }
+  #out { max-width: 100%; max-height: 100%; border-radius: 10px; border: 1px solid var(--line); background: #06070a; }
+
+  footer { border-top: 1px solid var(--line); padding: 14px 22px; display: grid; gap: 14px; }
+  .controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  button {
+    font: inherit; font-size: 13px; color: var(--fg); background: transparent; cursor: pointer;
+    border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px;
+  }
+  button:hover:not(:disabled) { border-color: var(--dim); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button.primary { border-color: var(--accent); color: var(--accent); }
+  button.stop { border-color: var(--rec); color: var(--rec); }
+  button[aria-pressed=true] { border-color: var(--accent); color: var(--accent); }
+  .opts { display: flex; gap: 18px; flex-wrap: wrap; align-items: center; font-size: 12px; color: var(--dim); }
+  .opt { display: flex; align-items: center; gap: 8px; }
+  input[type=range] { width: 110px; accent-color: var(--accent); }
+  output, .stat b { font-family: "Geist Mono", ui-monospace, "Cascadia Code", monospace; color: var(--fg); }
+  .stats { display: flex; gap: 20px; font-size: 12px; color: var(--dim); flex-wrap: wrap; }
+  .stat b { margin-left: 7px; }
+</style>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
+
+<header>
+  <div>
+    <h1>Cleanshot</h1>
+    <p>Pick a window, talk through it, and it zooms where the action is. Nothing uploads.</p>
+  </div>
+  <div style="font-size:12px;color:var(--dim)"><span class="dot" id="recDot"></span><span id="recState">idle</span></div>
+</header>
+
+<main><canvas id="out" width="1280" height="720"></canvas></main>
+
+<footer>
+  <div class="controls">
+    <button id="pick" class="primary">Choose source</button>
+    <button id="rec" disabled>Record</button>
+    <button id="stop" class="stop" disabled>Stop</button>
+    <button id="save" disabled>Save .webm</button>
+    <button id="autoZoom" aria-pressed="true">auto zoom</button>
+    <button id="demo">Demo source</button>
+  </div>
+  <div class="opts">
+    <div class="opt"><span>zoom</span><input id="zoomLevel" type="range" min="100" max="300" step="5" value="180"><output id="zoomLevelOut">1.8x</output></div>
+    <div class="opt"><span>padding</span><input id="pad" type="range" min="0" max="120" step="4" value="48"><output id="padOut">48</output></div>
+    <div class="opt"><span>radius</span><input id="radius" type="range" min="0" max="40" step="2" value="14"><output id="radiusOut">14</output></div>
+    <div class="opt"><span>backdrop</span>
+      <button data-bg="0" aria-pressed="true">dusk</button>
+      <button data-bg="1">slate</button>
+      <button data-bg="2">none</button>
+    </div>
+  </div>
+  <div class="stats">
+    <span class="stat">output <b id="sRes">--</b></span>
+    <span class="stat">fps <b id="sFps">--</b></span>
+    <span class="stat">composite <b id="sComp">--</b></span>
+    <span class="stat">recorded <b id="sSize">--</b></span>
+    <span class="stat">duration <b id="sDur">--</b></span>
+  </div>
+</footer>
+
+<script>
+(() => {
+  'use strict';
+  const params = new URLSearchParams(location.search);
+  const PEAK = params.get('peak') === '1';
+  const AUTODEMO = params.get('demo') === '1' || PEAK;
+
+  const el = id => document.getElementById(id);
+  const out = el('out');
+  const ctx = out.getContext('2d', { alpha: false });
+
+  const GRADIENTS = [
+    ['#23314d', '#0b0f1a'],
+    ['#2d3038', '#101216'],
+    null,
+  ];
+
+  const state = {
+    source: null, video: null, stream: null, recorder: null, chunks: [], blob: null,
+    auto: true, zoom: 1.8, pad: 48, radius: 14, bg: 0,
+    // current and target camera, in source pixels
+    cam: { x: 0.5, y: 0.5, z: 1 }, target: { x: 0.5, y: 0.5, z: 1 },
+    startedAt: 0, compositeMs: 0,
+  };
+
+  // ------------------------------------------------------------- demo source
+  // A synthetic "screen" so the whole pipeline can run without permission,
+  // which is also what the benchmark uses.
+  function demoStream(w, h) {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const g = c.getContext('2d');
+    let t = 0;
+    const blocks = Array.from({ length: 14 }, (_, i) => ({
+      x: (i % 5) * (w / 5) + 40, y: Math.floor(i / 5) * (h / 3) + 50,
+      w: w / 5 - 80, h: h / 3 - 90, hue: 200 + i * 9,
+    }));
+    (function tick() {
+      t += 0.016;
+      g.fillStyle = '#12151c'; g.fillRect(0, 0, w, h);
+      g.fillStyle = '#1a1f2b'; g.fillRect(0, 0, w, 54);
+      g.fillStyle = '#8b93a7'; g.font = '20px system-ui';
+      g.fillText('demo source  ' + t.toFixed(1) + 's', 28, 34);
+      blocks.forEach((b, i) => {
+        const pulse = 0.5 + 0.5 * Math.sin(t * 1.4 + i);
+        g.fillStyle = `hsl(${b.hue} 40% ${14 + pulse * 10}%)`;
+        g.fillRect(b.x, b.y, b.w, b.h);
+      });
+      // a "cursor" that moves around, so auto zoom has something to find
+      const cx = w / 2 + Math.cos(t * 0.7) * w * 0.32;
+      const cy = h / 2 + Math.sin(t * 1.1) * h * 0.3;
+      g.fillStyle = '#ffffff';
+      g.beginPath(); g.arc(cx, cy, 16, 0, 6.283); g.fill();
+      g.fillStyle = 'rgba(125,211,160,.35)';
+      g.beginPath(); g.arc(cx, cy, 44 + Math.sin(t * 6) * 8, 0, 6.283); g.fill();
+      requestAnimationFrame(tick);
+    })();
+    return c.captureStream(60);
+  }
+
+  async function useStream(stream, label) {
+    state.stream = stream;
+    const video = document.createElement('video');
+    video.srcObject = stream;
+    video.muted = true;
+    video.playsInline = true;
+    await video.play();
+    await new Promise(r => (video.readyState >= 2 ? r() : (video.onloadeddata = r)));
+    state.video = video;
+    const w = video.videoWidth || 1280, h = video.videoHeight || 720;
+    out.width = PEAK ? Math.min(1920, w) : Math.min(1600, w);
+    out.height = Math.round(out.width * h / w);
+    el('sRes').textContent = out.width + '×' + out.height;
+    el('recState').textContent = label;
+    el('rec').disabled = false;
+    stream.getVideoTracks()[0].addEventListener('ended', reset);
+  }
+
+  function reset() {
+    el('recState').textContent = 'idle';
+    el('recDot').classList.remove('live');
+    el('rec').disabled = true;
+    el('stop').disabled = true;
+    state.video = null;
+  }
+
+  el('pick').onclick = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: 60, cursor: 'always' }, audio: false,
+      });
+      await useStream(stream, 'source ready');
+    } catch (e) {
+      el('recState').textContent = 'permission denied';
+    }
+  };
+  el('demo').onclick = () => useStream(demoStream(1920, 1080), 'demo source');
+
+  // --------------------------------------------------------------- recording
+  el('rec').onclick = () => {
+    const stream = out.captureStream(60);
+    const types = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+    const mime = types.find(t => MediaRecorder.isTypeSupported(t)) || '';
+    state.chunks = [];
+    state.recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8_000_000 });
+    state.recorder.ondataavailable = e => {
+      if (e.data.size) {
+        state.chunks.push(e.data);
+        el('sSize').textContent = (state.chunks.reduce((a, b) => a + b.size, 0) / 1048576).toFixed(1) + ' MB';
+      }
+    };
+    state.recorder.onstop = () => {
+      state.blob = new Blob(state.chunks, { type: mime || 'video/webm' });
+      el('save').disabled = false;
+    };
+    state.recorder.start(1000);
+    state.startedAt = performance.now();
+    el('recDot').classList.add('live');
+    el('recState').textContent = 'recording';
+    el('rec').disabled = true;
+    el('stop').disabled = false;
+  };
+
+  el('stop').onclick = () => {
+    if (state.recorder && state.recorder.state !== 'inactive') state.recorder.stop();
+    el('recDot').classList.remove('live');
+    el('recState').textContent = 'stopped';
+    el('rec').disabled = false;
+    el('stop').disabled = true;
+  };
+
+  el('save').onclick = () => {
+    if (!state.blob) return;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(state.blob);
+    a.download = 'recording-' + out.width + 'x' + out.height + '.webm';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  };
+
+  // ------------------------------------------------------------ option wiring
+  const bind = (id, key, fmt, scale) => {
+    const input = el(id), o = el(id + 'Out');
+    input.oninput = () => {
+      state[key] = +input.value / (scale || 1);
+      o.textContent = fmt(state[key]);
+    };
+    o.textContent = fmt(state[key]);
+  };
+  bind('zoomLevel', 'zoom', v => v.toFixed(1) + 'x', 100);
+  bind('pad', 'pad', v => String(v));
+  bind('radius', 'radius', v => String(v));
+  el('autoZoom').onclick = () => {
+    state.auto = !state.auto;
+    el('autoZoom').setAttribute('aria-pressed', String(state.auto));
+  };
+  document.querySelectorAll('[data-bg]').forEach(b => {
+    b.onclick = () => {
+      state.bg = +b.dataset.bg;
+      document.querySelectorAll('[data-bg]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+    };
+  });
+
+  // -------------------------------------------------- motion-driven auto zoom
+  // A browser cannot see the OS cursor, so instead of faking it we find where
+  // the picture is changing: downscale two frames, diff them, take the centre
+  // of mass of the change. That is where the action is.
+  const SMALL_W = 64, SMALL_H = 36;
+  const small = document.createElement('canvas');
+  small.width = SMALL_W; small.height = SMALL_H;
+  const sctx = small.getContext('2d', { willReadFrequently: true });
+  let prevFrame = null;
+
+  function findAction(video) {
+    sctx.drawImage(video, 0, 0, SMALL_W, SMALL_H);
+    const cur = sctx.getImageData(0, 0, SMALL_W, SMALL_H).data;
+    if (!prevFrame) { prevFrame = cur.slice(); return null; }
+    let sx = 0, sy = 0, total = 0, peak = 0;
+    for (let y = 0; y < SMALL_H; y++) {
+      for (let x = 0; x < SMALL_W; x++) {
+        const i = (y * SMALL_W + x) * 4;
+        const d = Math.abs(cur[i] - prevFrame[i]) + Math.abs(cur[i + 1] - prevFrame[i + 1]) + Math.abs(cur[i + 2] - prevFrame[i + 2]);
+        if (d > 24) { sx += x * d; sy += y * d; total += d; if (d > peak) peak = d; }
+      }
+    }
+    prevFrame.set(cur);
+    if (total < 400) return null;                     // nothing much moved
+    return { x: (sx / total) / SMALL_W, y: (sy / total) / SMALL_H, energy: total };
+  }
+
+  // ----------------------------------------------------------------- compose
+  function rounded(c, x, y, w, h, r) {
+    c.beginPath();
+    c.moveTo(x + r, y);
+    c.arcTo(x + w, y, x + w, y + h, r);
+    c.arcTo(x + w, y + h, x, y + h, r);
+    c.arcTo(x, y + h, x, y, r);
+    c.arcTo(x, y, x + w, y, r);
+    c.closePath();
+  }
+
+  function compose(dt) {
+    const v = state.video;
+    const W = out.width, H = out.height;
+
+    // backdrop
+    const grad = GRADIENTS[state.bg];
+    if (grad) {
+      const g = ctx.createLinearGradient(0, 0, W, H);
+      g.addColorStop(0, grad[0]); g.addColorStop(1, grad[1]);
+      ctx.fillStyle = g;
+    } else ctx.fillStyle = '#06070a';
+    ctx.fillRect(0, 0, W, H);
+
+    if (!v) {
+      ctx.fillStyle = '#5b6377';
+      ctx.font = '16px system-ui';
+      ctx.textAlign = 'center';
+      ctx.fillText('Choose a source, or press Demo source', W / 2, H / 2);
+      ctx.textAlign = 'left';
+      return;
+    }
+
+    if (state.auto) {
+      const hit = findAction(v);
+      if (hit) {
+        state.target.x = hit.x; state.target.y = hit.y;
+        state.target.z = Math.min(state.zoom, 1 + (hit.energy / 60000) * (state.zoom - 1) + 0.35);
+      } else {
+        state.target.z += (1 - state.target.z) * 0.02;   // drift back out when still
+      }
+    } else {
+      state.target.x = 0.5; state.target.y = 0.5; state.target.z = 1;
+    }
+
+    // Critically damped ease, so the camera never snaps or overshoots.
+    const k = 1 - Math.pow(0.0015, dt);
+    state.cam.x += (state.target.x - state.cam.x) * k;
+    state.cam.y += (state.target.y - state.cam.y) * k;
+    state.cam.z += (state.target.z - state.cam.z) * k * 0.7;
+
+    const pad = state.pad;
+    const fw = W - pad * 2, fh = H - pad * 2;
+    const z = state.cam.z;
+    const sw = v.videoWidth / z, sh = v.videoHeight / z;
+    const sx = Math.max(0, Math.min(v.videoWidth - sw, state.cam.x * v.videoWidth - sw / 2));
+    const sy = Math.max(0, Math.min(v.videoHeight - sh, state.cam.y * v.videoHeight - sh / 2));
+
+    ctx.save();
+    // drop shadow under the frame
+    ctx.shadowColor = 'rgba(0,0,0,.55)';
+    ctx.shadowBlur = 40; ctx.shadowOffsetY = 14;
+    rounded(ctx, pad, pad, fw, fh, state.radius);
+    ctx.fillStyle = '#000'; ctx.fill();
+    ctx.restore();
+
+    ctx.save();
+    rounded(ctx, pad, pad, fw, fh, state.radius);
+    ctx.clip();
+    ctx.drawImage(v, sx, sy, sw, sh, pad, pad, fw, fh);
+    ctx.restore();
+  }
+
+  // ------------------------------------------------------------------- bench
+  const bench = {
+    frames: 0, fps: 0, slow: 0, worst: 0, samples: [],
+    get memoryMB() { return performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : null; },
+    report() {
+      const s = this.samples.slice().sort((a, b) => a - b);
+      const pct = p => s.length ? +s[Math.min(s.length - 1, Math.floor(s.length * p))].toFixed(2) : null;
+      return {
+        frames: this.frames, fps: +this.fps.toFixed(1), medianFrameMs: pct(0.5),
+        p95FrameMs: pct(0.95), worstFrameMs: +this.worst.toFixed(2), slowFrames: this.slow,
+        compositeMs: +state.compositeMs.toFixed(2),
+        output: out.width + 'x' + out.height,
+        recording: !!(state.recorder && state.recorder.state === 'recording'),
+        recordedMB: +(state.chunks.reduce((a, b) => a + b.size, 0) / 1048576).toFixed(2),
+        autoZoom: state.auto, zoom: +state.cam.z.toFixed(2), memoryMB: this.memoryMB,
+      };
+    },
+    reset() { this.frames = 0; this.slow = 0; this.worst = 0; this.samples = []; },
+    startDemo: () => useStream(demoStream(1920, 1080), 'demo source'),
+    record: () => el('rec').click(),
+    stop: () => el('stop').click(),
+  };
+  window.__bench = bench;
+
+  let last = performance.now(), acc = 0, count = 0;
+  function frame(now) {
+    requestAnimationFrame(frame);
+    const dt = Math.min(0.1, (now - last) / 1000);
+    last = now;
+    const ms = dt * 1000;
+
+    bench.frames++;
+    bench.samples.push(ms);
+    if (bench.samples.length > 2000) bench.samples.shift();
+    if (ms > 1000 / 45) bench.slow++;
+    if (ms > bench.worst && bench.frames > 5) bench.worst = ms;
+
+    const t0 = performance.now();
+    compose(dt);
+    state.compositeMs = state.compositeMs * 0.9 + (performance.now() - t0) * 0.1;
+
+    acc += ms; count++;
+    if (acc > 450) {
+      bench.fps = 1000 / (acc / count);
+      el('sFps').textContent = bench.fps.toFixed(0);
+      el('sComp').textContent = state.compositeMs.toFixed(1) + ' ms';
+      if (state.startedAt && state.recorder && state.recorder.state === 'recording') {
+        el('sDur').textContent = ((performance.now() - state.startedAt) / 1000).toFixed(0) + 's';
+      }
+      acc = 0; count = 0;
+    }
+  }
+  requestAnimationFrame(frame);
+
+  // Benchmarks and ?demo=1 start the synthetic pipeline straight away.
+  if (AUTODEMO) {
+    useStream(demoStream(PEAK ? 1920 : 1280, PEAK ? 1080 : 720), 'demo source')
+      .then(() => { if (PEAK) el('rec').click(); });
+  }
+})();
+</script>

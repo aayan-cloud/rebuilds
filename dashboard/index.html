@@ -1,0 +1,293 @@
+<meta charset="utf-8">
+<title>Machine</title>
+<link rel="icon" href="data:,">
+<meta name="description" content="Live GPU, CPU, model server and vault stats for the Agentic OS, in one page.">
+<style>
+  :root {
+    --bg: #0a0c10; --card: #0f1219; --fg: #eaedf3; --dim: #8a92a6; --line: #1c2130;
+    --ok: #63d2a4; --warn: #ffc46b; --bad: #ff6b6b; --accent: #7aa2ff;
+    font-family: Geist, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #f5f6f9; --card: #fff; --fg: #12141b; --dim: #5c6377; --line: #e2e5ec; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); min-height: 100vh; padding: 22px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 18px; flex-wrap: wrap; }
+  h1 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: .18em; text-transform: uppercase; }
+  .src { font-size: 12px; color: var(--dim); font-family: "Geist Mono", ui-monospace, monospace; }
+  .src b { color: var(--fg); font-weight: 500; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(258px, 1fr)); gap: 14px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 13px; padding: 15px 17px; }
+  .card h2 {
+    margin: 0 0 10px; font-size: 10px; font-weight: 500; letter-spacing: .2em;
+    text-transform: uppercase; color: var(--dim); display: flex; justify-content: space-between;
+  }
+  .card h2 em { font-style: normal; color: var(--fg); }
+  .big { font-size: 30px; line-height: 1; font-family: "Geist Mono", ui-monospace, monospace; font-weight: 500; }
+  .big small { font-size: 13px; color: var(--dim); margin-left: 6px; }
+  .bar { height: 7px; background: color-mix(in srgb, var(--line) 70%, transparent); border-radius: 4px; overflow: hidden; margin-top: 10px; }
+  .bar i { display: block; height: 100%; background: var(--accent); transition: width .4s ease; }
+  .bar.ok i { background: var(--ok); } .bar.warn i { background: var(--warn); } .bar.bad i { background: var(--bad); }
+  canvas { display: block; width: 100%; height: 56px; margin-top: 10px; }
+  .kv { display: flex; justify-content: space-between; font-size: 12px; color: var(--dim); margin-top: 7px; }
+  .kv b { color: var(--fg); font-weight: 500; font-family: "Geist Mono", ui-monospace, monospace; }
+  .pill { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; border: 1px solid var(--line); border-radius: 999px; padding: 4px 11px; }
+  .pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--dim); }
+  .pill.ok { border-color: var(--ok); color: var(--ok); } .pill.ok .dot { background: var(--ok); }
+  .pill.warn { border-color: var(--warn); color: var(--warn); } .pill.warn .dot { background: var(--warn); }
+  .pill.bad { border-color: var(--bad); color: var(--bad); } .pill.bad .dot { background: var(--bad); }
+  .cores { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; margin-top: 10px; }
+  .cores i { height: 26px; background: color-mix(in srgb, var(--line) 70%, transparent); border-radius: 3px; position: relative; overflow: hidden; }
+  .cores i s { position: absolute; bottom: 0; left: 0; right: 0; background: var(--accent); text-decoration: none; }
+  footer { margin-top: 16px; font-size: 11px; color: var(--dim); }
+  code { font-family: "Geist Mono", ui-monospace, monospace; background: color-mix(in srgb, var(--line) 60%, transparent); padding: 2px 6px; border-radius: 5px; }
+</style>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
+
+<header>
+  <div>
+    <h1>Machine</h1>
+    <div class="src">source <b id="src">connecting</b> · refresh <b id="rate">1s</b></div>
+  </div>
+  <div id="pills"></div>
+</header>
+
+<div class="grid">
+  <div class="card">
+    <h2>graphics <em id="gpuName">--</em></h2>
+    <div class="big" id="vram">--<small>MiB</small></div>
+    <div class="bar" id="vramBar"><i style="width:0"></i></div>
+    <canvas id="vramChart"></canvas>
+    <div class="kv"><span>utilisation</span><b id="gpuUtil">--</b></div>
+    <div class="kv"><span>temperature</span><b id="gpuTemp">--</b></div>
+    <div class="kv"><span>power</span><b id="gpuPower">--</b></div>
+  </div>
+
+  <div class="card">
+    <h2>model server <em id="modelState">--</em></h2>
+    <div class="big" id="modelName">--</div>
+    <div class="kv"><span>port</span><b id="modelPort">--</b></div>
+    <div class="kv"><span>pid</span><b id="modelPid">--</b></div>
+    <div class="kv"><span>context</span><b id="modelCtx">--</b></div>
+    <div class="kv"><span>state</span><b id="modelSleep">--</b></div>
+  </div>
+
+  <div class="card">
+    <h2>processor <em id="cpuPct">--</em></h2>
+    <div class="big" id="cpuName">--</div>
+    <div class="cores" id="cores"></div>
+    <canvas id="cpuChart"></canvas>
+  </div>
+
+  <div class="card">
+    <h2>memory <em id="ramPct">--</em></h2>
+    <div class="big" id="ramUsed">--<small>GB</small></div>
+    <div class="bar" id="ramBar"><i style="width:0"></i></div>
+    <div class="kv"><span>total</span><b id="ramTotal">--</b></div>
+    <div class="kv"><span>swap</span><b id="swap">--</b></div>
+  </div>
+
+  <div class="card">
+    <h2>vault</h2>
+    <div class="big" id="notes">--<small>notes</small></div>
+    <div class="kv"><span>chunks indexed</span><b id="chunks">--</b></div>
+    <div class="kv"><span>last backup</span><b id="backup">--</b></div>
+    <div class="kv"><span>journal today</span><b id="journal">--</b></div>
+  </div>
+
+  <div class="card">
+    <h2>storage</h2>
+    <div id="disks"></div>
+  </div>
+</div>
+
+<footer>
+  Live data needs the local agent: <code>uv run python dashboard/server.py</code> — without it this page shows demo numbers.
+</footer>
+
+<script>
+(() => {
+  'use strict';
+  const params = new URLSearchParams(location.search);
+  const PEAK = params.get('peak') === '1';
+  const DEMO = params.get('demo') === '1' || PEAK;
+  const API = params.get('api') || 'http://127.0.0.1:8799/stats';
+  const INTERVAL = PEAK ? 100 : +(params.get('every') || 1000);
+
+  const el = id => document.getElementById(id);
+  let seed = 7;
+  const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+
+  function chart(canvas, colour) {
+    const c = canvas.getContext('2d');
+    const data = [];
+    return (v, max) => {
+      data.push(v);
+      if (data.length > 120) data.shift();
+      const dpr = Math.min(devicePixelRatio || 1, 2);
+      const w = canvas.clientWidth, h = 56;
+      if (canvas.width !== w * dpr) { canvas.width = w * dpr; canvas.height = h * dpr; c.setTransform(dpr, 0, 0, dpr, 0, 0); }
+      c.clearRect(0, 0, w, h);
+      c.beginPath();
+      data.forEach((d, i) => {
+        const x = (i / (data.length - 1 || 1)) * w, y = h - (d / max) * (h - 3) - 1.5;
+        i ? c.lineTo(x, y) : c.moveTo(x, y);
+      });
+      c.strokeStyle = colour; c.lineWidth = 1.5; c.stroke();
+      c.lineTo(w, h); c.lineTo(0, h); c.closePath();
+      c.fillStyle = colour.replace(')', ', .12)').replace('rgb', 'rgba');
+      c.fill();
+    };
+  }
+  const vramChart = chart(el('vramChart'), 'rgb(122,162,255)');
+  const cpuChart = chart(el('cpuChart'), 'rgb(99,210,164)');
+
+  const coreBox = el('cores');
+  let coreEls = [];
+  function ensureCores(n) {
+    if (coreEls.length === n) return;
+    coreBox.innerHTML = '';
+    coreEls = Array.from({ length: n }, () => {
+      const i = document.createElement('i');
+      i.innerHTML = '<s style="height:0"></s>';
+      coreBox.appendChild(i);
+      return i.firstChild;
+    });
+  }
+
+  // Demo numbers shaped like the real machine, so the hosted page looks right.
+  let demo = { vram: 15100, cpu: 22, ram: 9.4, t: 0 };
+  function demoStats() {
+    demo.t += 0.1;
+    demo.vram = Math.max(500, Math.min(16200, demo.vram + (rnd() - 0.5) * 240));
+    demo.cpu = Math.max(2, Math.min(100, demo.cpu + (rnd() - 0.5) * 18));
+    demo.ram = Math.max(4, Math.min(15.4, demo.ram + (rnd() - 0.5) * 0.3));
+    return {
+      demo: true,
+      gpu: { name: 'RTX 5060 Ti', vramUsedMiB: Math.round(demo.vram), vramTotalMiB: 16311,
+             utilPct: Math.round(Math.min(100, demo.cpu * 1.6)), tempC: 54 + Math.round(rnd() * 12),
+             powerW: 70 + Math.round(rnd() * 90) },
+      model: { running: demo.vram > 3000, port: 18500, pid: 11176, asleep: demo.vram < 3000,
+               name: 'Qwen3.8-27B-UD-Q3_K_XL', ctx: 65536 },
+      cpu: { name: 'Ryzen 5 5600', percent: Math.round(demo.cpu),
+             perCore: Array.from({ length: 12 }, () => Math.round(rnd() * 100)) },
+      memory: { usedGB: +demo.ram.toFixed(1), totalGB: 15.6, swapGB: 2.1 },
+      vault: { notes: 51, chunks: 154, lastBackup: '12 min ago', journalToday: 3 },
+      disks: [{ mount: 'C:', usedGB: 612, totalGB: 931 }, { mount: 'D:', usedGB: 1204, totalGB: 1863 }],
+      games: [],
+    };
+  }
+
+  function pill(label, cls) {
+    return `<span class="pill ${cls}"><i class="dot"></i>${label}</span>`;
+  }
+
+  function render(s) {
+    el('src').textContent = s.demo ? 'demo data' : 'local agent';
+
+    const pills = [];
+    pills.push(s.model.running
+      ? pill(s.model.asleep ? 'model asleep' : 'model live', s.model.asleep ? 'warn' : 'ok')
+      : pill('model off', 'bad'));
+    if (s.games && s.games.length) pills.push(pill('game running: ' + s.games[0], 'warn'));
+    el('pills').innerHTML = pills.join(' ');
+
+    // gpu
+    const g = s.gpu;
+    el('gpuName').textContent = g.name;
+    el('vram').innerHTML = g.vramUsedMiB.toLocaleString() + '<small>/ ' + g.vramTotalMiB.toLocaleString() + ' MiB</small>';
+    const vpct = (g.vramUsedMiB / g.vramTotalMiB) * 100;
+    const vbar = el('vramBar');
+    vbar.firstElementChild.style.width = vpct + '%';
+    vbar.className = 'bar ' + (vpct > 96 ? 'bad' : vpct > 85 ? 'warn' : 'ok');
+    el('gpuUtil').textContent = g.utilPct + '%';
+    el('gpuTemp').textContent = g.tempC != null ? g.tempC + ' °C' : '--';
+    el('gpuPower').textContent = g.powerW != null ? g.powerW + ' W' : '--';
+    vramChart(g.vramUsedMiB, g.vramTotalMiB);
+
+    // model
+    const m = s.model;
+    el('modelState').textContent = m.running ? (m.asleep ? 'asleep' : 'ready') : 'stopped';
+    el('modelName').textContent = m.name || '--';
+    el('modelPort').textContent = m.port || '--';
+    el('modelPid').textContent = m.pid || '--';
+    el('modelCtx').textContent = m.ctx ? (m.ctx / 1024) + 'K' : '--';
+    el('modelSleep').textContent = m.running ? (m.asleep ? 'VRAM freed' : 'loaded') : 'not running';
+
+    // cpu
+    el('cpuName').textContent = s.cpu.name;
+    el('cpuPct').textContent = s.cpu.percent + '%';
+    ensureCores(s.cpu.perCore.length);
+    s.cpu.perCore.forEach((v, i) => { if (coreEls[i]) coreEls[i].style.height = v + '%'; });
+    cpuChart(s.cpu.percent, 100);
+
+    // memory
+    const mem = s.memory;
+    const rpct = (mem.usedGB / mem.totalGB) * 100;
+    el('ramPct').textContent = rpct.toFixed(0) + '%';
+    el('ramUsed').innerHTML = mem.usedGB.toFixed(1) + '<small>GB used</small>';
+    const rbar = el('ramBar');
+    rbar.firstElementChild.style.width = rpct + '%';
+    rbar.className = 'bar ' + (rpct > 92 ? 'bad' : rpct > 80 ? 'warn' : 'ok');
+    el('ramTotal').textContent = mem.totalGB.toFixed(1) + ' GB';
+    el('swap').textContent = mem.swapGB != null ? mem.swapGB.toFixed(1) + ' GB' : '--';
+
+    // vault
+    el('notes').innerHTML = s.vault.notes + '<small>notes</small>';
+    el('chunks').textContent = s.vault.chunks;
+    el('backup').textContent = s.vault.lastBackup;
+    el('journal').textContent = s.vault.journalToday + ' entries';
+
+    // disks
+    el('disks').innerHTML = s.disks.map(d => `
+      <div class="kv"><span>${d.mount}</span><b>${d.usedGB} / ${d.totalGB} GB</b></div>
+      <div class="bar ${d.usedGB / d.totalGB > 0.9 ? 'bad' : 'ok'}"><i style="width:${(d.usedGB / d.totalGB * 100).toFixed(0)}%"></i></div>`).join('');
+  }
+
+  const bench = {
+    polls: 0, errors: 0, lastMs: 0, samples: [],
+    get memoryMB() { return performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : null; },
+    report() {
+      const s = this.samples.slice().sort((a, b) => a - b);
+      return {
+        polls: this.polls, pollErrors: this.errors,
+        medianPollMs: s.length ? +s[Math.floor(s.length / 2)].toFixed(2) : null,
+        worstPollMs: s.length ? +s[s.length - 1].toFixed(2) : null,
+        intervalMs: INTERVAL, source: DEMO ? 'demo' : 'agent',
+        domNodes: document.querySelectorAll('*').length, memoryMB: this.memoryMB,
+        fps: null,
+      };
+    },
+    reset() { this.polls = 0; this.errors = 0; this.samples = []; },
+  };
+  window.__bench = bench;
+
+  let dead = 0, misses = 0;          // local agent backoff
+  async function poll() {
+    const t0 = performance.now();
+    let data = null;
+    // Stop hammering an agent that is not there: after two refusals, fall back
+    // to demo numbers and only retry every 30s.
+    if (!DEMO && (!dead || Date.now() - dead > 30000)) {
+      try {
+        const r = await fetch(API, { cache: 'no-store' });
+        if (r.ok) { data = await r.json(); dead = 0; misses = 0; }
+      } catch (e) {
+        bench.errors++;
+        if (++misses >= 2) dead = Date.now();
+      }
+    }
+    render(data || demoStats());
+    bench.polls++;
+    bench.samples.push(performance.now() - t0);
+    if (bench.samples.length > 500) bench.samples.shift();
+  }
+
+  el('rate').textContent = (INTERVAL / 1000).toFixed(INTERVAL < 1000 ? 1 : 0) + 's';
+  poll();
+  setInterval(poll, INTERVAL);
+})();
+</script>
