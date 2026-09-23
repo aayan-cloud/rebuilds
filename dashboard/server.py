@@ -15,6 +15,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 from datetime import date, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -30,6 +31,29 @@ CACHE_SECONDS = 0.5
 
 _cache: dict = {"at": 0.0, "data": None}
 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+
+# psutil tracks "CPU since the last call" per thread, and ThreadingHTTPServer
+# answers every request on a fresh thread - so calling cpu_percent() in the
+# handler always read 0%. One sampler thread owns the counters instead, and
+# measures network throughput the same way.
+_live: dict = {"percent": 0, "perCore": [], "downMbps": 0.0, "upMbps": 0.0}
+
+
+def _sample_forever(period: float = 1.0) -> None:
+    psutil.cpu_percent(interval=None)
+    psutil.cpu_percent(interval=None, percpu=True)
+    last, last_t = psutil.net_io_counters(), time.time()
+    while True:
+        time.sleep(period)
+        now, now_t = psutil.net_io_counters(), time.time()
+        dt = max(now_t - last_t, 1e-3)
+        _live.update(
+            percent=int(psutil.cpu_percent(interval=None)),
+            perCore=[int(v) for v in psutil.cpu_percent(interval=None, percpu=True)],
+            downMbps=round((now.bytes_recv - last.bytes_recv) * 8 / dt / 1e6, 2),
+            upMbps=round((now.bytes_sent - last.bytes_sent) * 8 / dt / 1e6, 2),
+        )
+        last, last_t = now, now_t
 
 
 def _run(cmd: list[str], timeout: float = 2.0) -> str:
@@ -146,13 +170,14 @@ def snapshot() -> dict:
         "model": model(),
         "cpu": {
             "name": (psutil.cpu_freq() and f"{psutil.cpu_count(logical=False)}C/{psutil.cpu_count()}T") or "cpu",
-            "percent": int(psutil.cpu_percent(interval=None)),
-            "perCore": [int(v) for v in psutil.cpu_percent(interval=None, percpu=True)],
+            "percent": _live["percent"],
+            "perCore": list(_live["perCore"]),
         },
         "memory": {"usedGB": round(mem.used / 1e9, 1), "totalGB": round(mem.total / 1e9, 1),
                    "swapGB": round(swap.used / 1e9, 1)},
         "vault": vault(),
         "disks": disks,
+        "net": {"downMbps": _live["downMbps"], "upMbps": _live["upMbps"]},
         "games": games(),
     }
     _cache.update(at=now, data=data)
@@ -178,7 +203,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    psutil.cpu_percent(interval=None)          # prime the counter
+    threading.Thread(target=_sample_forever, daemon=True).start()
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     print(f"machine stats on http://127.0.0.1:{PORT}/stats  (ctrl+c to stop)")
     try:

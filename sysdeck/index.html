@@ -346,8 +346,9 @@
       el('pMode').textContent = 'live telemetry';
       state.mem = data.memory.usedGB;
       state.memTotal = data.memory.totalGB;
-      data.cpu.perCore.slice(0, CORES).forEach((v, i) => { if (coreEls[i]) coreEls[i].v = v; });
-      state.down = data.net.downMbps; state.up = data.net.upMbps;
+      (data.cpu.perCore || []).slice(0, CORES).forEach((v, i) => { if (coreEls[i]) coreEls[i].v = v; });
+      // Older helpers sent no network block; one missing field must not blank the whole page.
+      if (data.net) { state.down = data.net.downMbps; state.up = data.net.upMbps; }
     } else {
       coreEls.forEach(c => {
         const target = rnd() > 0.93 ? 60 + rnd() * 40 : rnd() * 35;
